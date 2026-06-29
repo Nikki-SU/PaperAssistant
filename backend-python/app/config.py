@@ -6,12 +6,42 @@
 """
 from __future__ import annotations
 
+import csv
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 POINTER_FILE = Path.home() / ".paperassistant_root"
+
+
+# 全局 config 目录下的 4 个 CSV（SPEC §5.1）
+API_CONFIG_HEADERS = [
+    "role", "endpoint", "model", "api_key_set", "timeout", "last_modified",
+]
+CATEGORY_CONFIG_HEADERS = ["perspective", "category", "subcategory"]
+CUSTOM_FIELDS_HEADERS = ["field_name", "field_type", "description"]
+APP_CONFIG_HEADERS = ["key", "value"]
+
+# 默认的 4 个 AI 接口位（未配置）—— SPEC §4.5
+DEFAULT_API_ROLES = [
+    {"role": "mineru",    "endpoint": "", "model": "",  "api_key_set": "false", "timeout": "300", "last_modified": ""},
+    {"role": "assistant", "endpoint": "", "model": "",  "api_key_set": "false", "timeout": "120", "last_modified": ""},
+    {"role": "auditor",   "endpoint": "", "model": "",  "api_key_set": "false", "timeout": "120", "last_modified": ""},
+    {"role": "secretary", "endpoint": "", "model": "",  "api_key_set": "false", "timeout": "60",  "last_modified": ""},
+]
+
+# 默认分类（SPEC §7.3）—— 社科 / 理科 默认子阶段
+DEFAULT_CATEGORIES = [
+    {"perspective": "social",  "category": "理论",      "subcategory": ""},
+    {"perspective": "social",  "category": "研究设计",  "subcategory": ""},
+    {"perspective": "social",  "category": "数据",      "subcategory": ""},
+    {"perspective": "social",  "category": "结果和结论", "subcategory": ""},
+    {"perspective": "science", "category": "实验",      "subcategory": ""},
+    {"perspective": "science", "category": "表征",      "subcategory": ""},
+    {"perspective": "science", "category": "机理",      "subcategory": ""},
+    {"perspective": "science", "category": "结果和结论", "subcategory": ""},
+]
 
 
 @dataclass
@@ -37,6 +67,12 @@ class Settings:
     temp_dir: Path = field(init=False)
     monitor_dir: Path = field(init=False)
 
+    # 全局 config CSV 路径
+    api_config_csv: Path = field(init=False)
+    category_config_csv: Path = field(init=False)
+    custom_fields_csv: Path = field(init=False)
+    app_config_csv: Path = field(init=False)
+
     def __post_init__(self) -> None:
         self.data_root = Path(self.data_root).expanduser().resolve()
         self.config_dir = self.data_root / "config"
@@ -49,6 +85,11 @@ class Settings:
         self.temp_dir = self.data_root / "temp"
         self.monitor_dir = self.temp_dir / "monitor"
 
+        self.api_config_csv = self.config_dir / "api_config.csv"
+        self.category_config_csv = self.config_dir / "category_config.csv"
+        self.custom_fields_csv = self.config_dir / "custom_fields.csv"
+        self.app_config_csv = self.config_dir / "app.csv"
+
     def ensure_dirs(self) -> None:
         for d in (
             self.config_dir,
@@ -60,6 +101,30 @@ class Settings:
             self.monitor_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
+        self._init_global_configs()
+
+    def _init_global_configs(self) -> None:
+        """首次启动时种下 4 个全局 config CSV。已存在的不动。"""
+        _seed_csv(self.api_config_csv,      API_CONFIG_HEADERS,      DEFAULT_API_ROLES)
+        _seed_csv(self.category_config_csv, CATEGORY_CONFIG_HEADERS, DEFAULT_CATEGORIES)
+        _seed_csv(self.custom_fields_csv,   CUSTOM_FIELDS_HEADERS,   [])
+        # app.csv：把当前关键路径登记一下，供前端读取
+        _seed_csv(self.app_config_csv, APP_CONFIG_HEADERS, [
+            {"key": "data_root",   "value": str(self.data_root)},
+            {"key": "monitor_dir", "value": str(self.monitor_dir)},
+        ])
+
+
+def _seed_csv(path: Path, headers: list[str], default_rows: list[dict]) -> None:
+    """如果文件不存在，写入 headers + default_rows；存在则一字不动。"""
+    if path.exists():
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=headers)
+        w.writeheader()
+        for row in default_rows:
+            w.writerow({h: row.get(h, "") for h in headers})
 
 
 def _read_pointer() -> Optional[Path]:
@@ -117,6 +182,7 @@ def get_settings() -> Settings:
 
 
 def set_data_root(path: str | os.PathLike) -> Settings:
+    """切换数据根目录：写指针文件 + 重建 settings + 重新 ensure_dirs。"""
     global _settings
     _settings = load_settings(path)
     return _settings
