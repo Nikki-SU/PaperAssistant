@@ -12,6 +12,10 @@ from .ai_orchestrator import (
     reload_orchestrator,
     load_role_config,
 )
+from .memory_writer import (
+    append_assistant_memory,
+    append_secretary_memory,
+)
 
 __all__ = [
     "MineruClient",
@@ -26,4 +30,6 @@ __all__ = [
     "get_orchestrator",
     "reload_orchestrator",
     "load_role_config",
+    "append_assistant_memory",
+    "append_secretary_memory",
 ]

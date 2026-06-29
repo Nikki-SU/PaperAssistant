@@ -146,5 +146,88 @@ def render_literature_card_md(meta: dict[str, Any]) -> str:
     return fm + body
 
 
+# ---------- 知识库卡片：SPEC §八.2 ----------
+
+def render_knowledge_card_md(meta: dict[str, Any]) -> str:
+    """SPEC §8.2：知识库卡片 Markdown 渲染。
+
+    结构：YAML frontmatter（card_id/subject/source/audited） + 提示词 + 摘要。
+    """
+    fm = render_frontmatter(
+        {
+            "card_id": meta.get("card_id", ""),
+            "subject": meta.get("subject", ""),
+            "title": meta.get("title", ""),
+            "source_book": meta.get("source_book", ""),
+            "source_section": meta.get("source_section", ""),
+            "audited": str(meta.get("audited", "")).lower(),
+            "last_modified": meta.get("last_modified", ""),
+        }
+    )
+    audited_badge = "✅ 已通过事实核查" if str(meta.get("audited", "")).lower() == "true" else "⚠️ 未审"
+    body = f"""# {meta.get('title') or '(未命名知识点)'}
+
+> **学科**：{meta.get('subject', '')}
+> **来源教材**：{meta.get('source_book') or '_（未填写）_'}
+> **来源章节**：{meta.get('source_section') or '_（未填写）_'}
+> **审阅状态**：{audited_badge}
+
+## 用户提示词
+
+{meta.get('prompt') or '_（无）_'}
+
+## AI 提取摘要
+
+{meta.get('summary') or '_（待生成）_'}
+
+---
+
+> 卡片 ID：`{meta.get('card_id', '')}`  ·  最后修改：{meta.get('last_modified', '')}
+"""
+    return fm + body
+
+
+# ---------- 三角色记忆：SPEC §八.3 ----------
+
+def append_role_memory_entry(
+    path: Path,
+    *,
+    role_label: str,
+    title: str,
+    body: str,
+    meta: Optional[dict[str, Any]] = None,
+) -> None:
+    """三角色记忆通用追加：助手/审阅/秘书。
+
+    每条形如：
+        ### {时间} · {标题}
+        - 元信息字段...
+
+        {正文}
+
+    role_label 只用于在追加前确认文件是该角色的（不强校验）。
+    """
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lines = [f"\n### {ts} · {title}\n"]
+    if meta:
+        for k, v in meta.items():
+            sv = "" if v is None else str(v)
+            if sv:
+                lines.append(f"- **{k}**：{sv}\n")
+    if body:
+        lines.append("\n")
+        lines.append(body.rstrip() + "\n")
+    with _LOCK:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # 文件不存在时种一个最小标头（避免 seed 漏掉时丢失记录）
+        if not path.exists():
+            path.write_text(
+                f"# {role_label} 记忆\n\n_自动追加日志。_\n",
+                encoding="utf-8",
+            )
+        with path.open("a", encoding="utf-8") as f:
+            f.write("".join(lines))
+
+
 def now_iso() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

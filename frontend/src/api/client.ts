@@ -83,20 +83,69 @@ export interface AIChatMessage {
   content: string;
 }
 
+// SPEC §4.3：12 种任务类型
+export type AIChatTaskType =
+  // 必须自动核查（6）
+  | "summarize_literature"
+  | "extract_textbook"
+  | "extract_methodology"
+  | "compare_literature"
+  | "regen_literature_card"
+  | "generate_knowledge_card"
+  // 建议（4）
+  | "recommend_topic"
+  | "recommend_keywords"
+  | "suggest_method"
+  | "suggest_framework"
+  // 自由（2）
+  | "free_chat"
+  | "other";
+
+export type AIChatPolicy = "must_audit" | "suggestion" | "free";
+
+export interface TaskTypeInfo {
+  key: AIChatTaskType;
+  label: string;
+  policy: AIChatPolicy;
+  requires_sources: boolean;
+}
+
+export interface ChatSource {
+  title?: string;
+  snippet: string;
+}
+
 export interface AIChatRequest {
   role?: AIRole;
   messages: AIChatMessage[];
   project?: string;
   stage?: string;
+  task_type?: AIChatTaskType;
+  sources?: ChatSource[];
   extra?: Record<string, unknown>;
 }
+
+// SPEC §4.3：6 种 audit_status
+export type AuditStatus =
+  | "verified"
+  | "failed"
+  | "not_configured"
+  | "suggestion"
+  | "user"
+  | "error";
 
 export interface AIChatResponse {
   success: boolean;
   role: string;
   effective_role: string;
   output: string;
-  audit_status: "verified" | "suggestion" | "user" | "error";
+  audit_status: AuditStatus;
+  audit_rounds: number;
+  audit_feedback: string;
+  audit_log_path: string;
+  audit_dropped: boolean;
+  task_type: string;
+  task_label: string;
   error: string;
   error_code: string;
   project?: string | null;
@@ -131,7 +180,44 @@ export interface VerifyResponse {
   rounds: number;
   last_feedback: string;
   log_path: string;
-  audit_status: "verified" | "suggestion" | "user" | "error";
+  audit_status: AuditStatus;
+}
+
+// 知识库相关（与后端 KNOWLEDGE_CSV_HEADERS 对齐）
+export interface KnowledgeCard {
+  card_id: string;
+  subject: string;
+  title: string;
+  prompt: string;
+  summary: string;
+  audited: string;             // "true" / "false"
+  source_book: string;
+  source_section: string;
+  last_modified: string;
+  [k: string]: string;
+}
+
+export interface SubjectInfo {
+  subject: string;
+  textbook_count: number;
+  card_count: number;
+}
+
+export interface TextbookInfo {
+  name: string;
+  size: number;
+  uploaded_at: string;
+  md_extracted?: boolean;
+  [k: string]: string | number | boolean | undefined;
+}
+
+// 临时知识
+export interface TempKnowledgeItem {
+  ts: string;
+  content: string;
+  source: string;
+  audited: boolean;
+  feedback: string;
 }
 
 async function _json<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -341,12 +427,17 @@ export const api = {
         messages: input.messages,
         project: input.project ?? null,
         stage: input.stage ?? null,
+        task_type: input.task_type ?? "free_chat",
+        sources: input.sources ?? [],
         extra: input.extra ?? null,
       }),
     });
   },
   aiStatus() {
     return _json<{ items: AIRoleStatus[] }>(`${BASE}/api/ai/status`);
+  },
+  aiTaskTypes() {
+    return _json<{ items: TaskTypeInfo[] }>(`${BASE}/api/ai/task_types`);
   },
   aiVerify(input: VerifyRequest) {
     return _json<VerifyResponse>(`${BASE}/api/ai/verify`, {
@@ -359,5 +450,107 @@ export const api = {
         max_rounds: input.max_rounds ?? 5,
       }),
     });
+  },
+
+  // ---------- knowledge (SPEC §8.2) ----------
+  listSubjects() {
+    return _json<{ subjects: SubjectInfo[] }>(`${BASE}/api/knowledge/subjects`);
+  },
+  createSubject(subject: string) {
+    const u = new URL(`${BASE}/api/knowledge/subjects`);
+    u.searchParams.set("subject", subject);
+    return _json<{ ok: boolean; subject: string }>(u.toString(), { method: "POST" });
+  },
+  listTextbooks(subject: string) {
+    const u = new URL(`${BASE}/api/knowledge/textbooks`);
+    u.searchParams.set("subject", subject);
+    return _json<{ items: TextbookInfo[] }>(u.toString());
+  },
+  async uploadTextbook(file: File, subject: string) {
+    const u = new URL(`${BASE}/api/knowledge/textbook`);
+    u.searchParams.set("subject", subject);
+    const fd = new FormData();
+    fd.append("file", file);
+    return _json<{ ok: boolean; subject: string; name: string; mineru: { success: boolean; message: string } }>(
+      u.toString(),
+      { method: "POST", body: fd }
+    );
+  },
+  deleteTextbook(subject: string, name: string) {
+    return _json<{ ok: boolean }>(
+      `${BASE}/api/knowledge/textbooks/${encodeURIComponent(subject)}/${encodeURIComponent(name)}`,
+      { method: "DELETE" }
+    );
+  },
+  listKnowledgeCards(subject?: string) {
+    const u = new URL(`${BASE}/api/knowledge`);
+    if (subject) u.searchParams.set("subject", subject);
+    return _json<{ cards: KnowledgeCard[]; total: number }>(u.toString());
+  },
+  upsertKnowledgeCard(card: {
+    card_id?: string;
+    subject: string;
+    title: string;
+    prompt?: string;
+    summary: string;
+    source_book?: string;
+    source_section?: string;
+    audited: boolean;
+  }) {
+    return _json<{ card: KnowledgeCard; created: boolean; markdown_path: string }>(`${BASE}/api/knowledge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(card),
+    });
+  },
+  getKnowledgeCard(cardId: string) {
+    return _json<{ card: KnowledgeCard }>(
+      `${BASE}/api/knowledge/${encodeURIComponent(cardId)}`
+    );
+  },
+  async getKnowledgeCardMarkdown(cardId: string): Promise<string> {
+    const resp = await fetch(
+      `${BASE}/api/knowledge/by-id/markdown/${encodeURIComponent(cardId)}`
+    );
+    if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText}`);
+    return resp.text();
+  },
+  deleteKnowledgeCard(cardId: string) {
+    return _json<{ card_id: string; subject: string; deleted_from_index: boolean }>(
+      `${BASE}/api/knowledge/${encodeURIComponent(cardId)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  // ---------- temp_knowledge (SPEC §8.4) ----------
+  getTempKnowledge(project: string) {
+    return _json<{ items: TempKnowledgeItem[] }>(
+      `${BASE}/api/temp_knowledge/${encodeURIComponent(project)}`
+    );
+  },
+  appendTempKnowledge(
+    project: string,
+    input: { content: string; source?: string; audited: boolean; feedback?: string }
+  ) {
+    return _json<{ ok: boolean; item: TempKnowledgeItem }>(
+      `${BASE}/api/temp_knowledge/${encodeURIComponent(project)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+  },
+  clearTempKnowledge(project: string) {
+    return _json<{ ok: boolean; backup: string }>(
+      `${BASE}/api/temp_knowledge/${encodeURIComponent(project)}/clear`,
+      { method: "POST" }
+    );
+  },
+  deleteTempKnowledge(project: string) {
+    return _json<{ ok: boolean }>(
+      `${BASE}/api/temp_knowledge/${encodeURIComponent(project)}`,
+      { method: "DELETE" }
+    );
   },
 };

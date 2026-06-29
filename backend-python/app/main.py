@@ -15,9 +15,11 @@ from .api import (
     ai as ai_api,
     citation,
     health,
+    knowledge as knowledge_api,
     literature,
     project,
     settings as settings_api,
+    temp_knowledge as temp_knowledge_api,
     typesetting,
 )
 from .config import get_settings
@@ -60,7 +62,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="PaperAssistant Backend",
-        version="0.2.0",
+        version="0.3.0",
         description="本地优先的学术写作辅助后端（SPEC v0.1）",
     )
     app.add_middleware(
@@ -79,6 +81,8 @@ def create_app() -> FastAPI:
     app.include_router(typesetting.router)
     app.include_router(settings_api.router)
     app.include_router(ai_api.router)
+    app.include_router(knowledge_api.router)
+    app.include_router(temp_knowledge_api.router)
 
     @app.on_event("startup")
     def _on_startup() -> None:

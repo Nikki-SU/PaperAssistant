@@ -17,6 +17,8 @@ from .markdown_io import (
     read_frontmatter,
     render_frontmatter,
     render_literature_card_md,
+    render_knowledge_card_md,
+    append_role_memory_entry,
     now_iso,
     LIT_CSV_HEADERS,
 )
@@ -34,6 +36,8 @@ __all__ = [
     "read_frontmatter",
     "render_frontmatter",
     "render_literature_card_md",
+    "render_knowledge_card_md",
+    "append_role_memory_entry",
     "now_iso",
     "LIT_CSV_HEADERS",
 ]
