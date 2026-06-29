@@ -1,1 +1,10 @@
-"""Pydantic 数据模型（仅 HTTP 层使用，落盘仍 CSV+Markdown）。"""
+from .literature_card import LiteratureCard, LiteratureCardCreate
+from .knowledge_card import KnowledgeCard, KnowledgeCardCreate, KNOWLEDGE_CSV_HEADERS
+
+__all__ = [
+    "LiteratureCard",
+    "LiteratureCardCreate",
+    "KnowledgeCard",
+    "KnowledgeCardCreate",
+    "KNOWLEDGE_CSV_HEADERS",
+]

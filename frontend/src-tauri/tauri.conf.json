@@ -2,21 +2,21 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "PaperAssistant",
   "version": "0.1.0",
-  "identifier": "com.nikki-su.paperassistant",
+  "identifier": "com.papassistant.app",
   "build": {
-    "frontendDist": "../dist",
-    "devUrl": "http://localhost:1421",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "npm run build"
+    "devUrl": "http://127.0.0.1:1421",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
         "title": "PaperAssistant",
-        "width": 1400,
-        "height": 900,
-        "minWidth": 1000,
-        "minHeight": 600
+        "width": 1280,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 640
       }
     ],
     "security": {
@@ -26,9 +26,6 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "icon": [],
-    "externalBin": [
-      "binaries/paperassistant-backend"
-    ]
+    "icon": ["icons/icon.png"]
   }
 }

@@ -1,9 +1,16 @@
-"""阶段四：引用。仅勾选的文献进入引用列表
+"""stage: citation
 
-对应 SPEC：项目二 §七.4 引用
+TODO: 实现 SPEC §二 中关于「citation」阶段的具体业务。
+当前仅提供占位入口，便于 main.py 引用与阶段切换。
 """
 from __future__ import annotations
 
+STAGE_NAME = "citation"
 
-# TODO: 实现该阶段的业务逻辑入口函数
-# 该模块通常由 api/ 层调用，并依赖 services.ai_orchestrator + storage
+
+def describe() -> dict:
+    return {
+        "stage": STAGE_NAME,
+        "status": "skeleton",
+        "todo": True,
+    }

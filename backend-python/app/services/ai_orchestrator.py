@@ -1,34 +1,141 @@
-"""AI 调度：助手 / 审阅 / 秘书三角色协作。
+"""AI 编排器（SPEC §四 4 个接口位的统一入口）。
 
-对应 SPEC：项目二 §四.2 AI 职责边界 / §四.5 四个 API 接口位
+四个接口位：
+- ASSISTANT   助手：负责常规对话、思路探索、文献综述初稿、章节起草等
+- AUDITOR     审阅：负责事实核查、引用验证、文献依据比对
+- SECRETARY   秘书：负责调度、节奏控制、产物清单管理
+- MINERU      已在 MineruClient 中实现
+
+铁律：当 API key 未配置或网络失败时，必须降级返回结构化错误，不能让业务侧崩溃。
+本文件目前是「接口位骨架」：保留 prompt / payload / retry 钩子，TODO 接真实模型。
 """
 from __future__ import annotations
+
+import json
+import logging
+import os
+import urllib.error
+import urllib.request
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class AIRole(str, Enum):
-    ASSISTANT = "assistant"  # 主要输出
-    REVIEWER = "reviewer"    # 事实核查
-    SECRETARY = "secretary"  # 错别字 / 语法（可选，未配置则复用助手）
+    ASSISTANT = "assistant"
+    AUDITOR = "auditor"
+    SECRETARY = "secretary"
+
+
+@dataclass
+class AIResult:
+    success: bool
+    role: AIRole
+    output: str = ""
+    raw: dict[str, Any] = field(default_factory=dict)
+    error: str = ""
+
+
+@dataclass
+class AIRoleConfig:
+    api_key: str = ""
+    endpoint: str = ""
+    model: str = ""
+    timeout: float = 60.0
 
 
 class AIOrchestrator:
-    """三角色调度器，根据任务类型路由到对应 API。"""
+    """SPEC §四 的统一编排：根据 role 路由到对应接口位。"""
 
-    def __init__(self, api_config: dict[AIRole, dict]):
-        self.api_config = api_config
+    def __init__(self, configs: Optional[dict[AIRole, AIRoleConfig]] = None) -> None:
+        self.configs: dict[AIRole, AIRoleConfig] = configs or {}
+        for role in AIRole:
+            self.configs.setdefault(role, self._from_env(role))
 
-    async def call(self, role: AIRole, prompt: str, **kwargs) -> str:
-        """调用指定角色的 AI。"""
-        # TODO: 根据 role 取出 API config → httpx 调用 OpenAI 兼容接口
-        raise NotImplementedError
+    @staticmethod
+    def _from_env(role: AIRole) -> AIRoleConfig:
+        prefix = f"PA_{role.value.upper()}_"
+        return AIRoleConfig(
+            api_key=os.environ.get(f"{prefix}API_KEY", ""),
+            endpoint=os.environ.get(f"{prefix}ENDPOINT", ""),
+            model=os.environ.get(f"{prefix}MODEL", ""),
+            timeout=float(os.environ.get(f"{prefix}TIMEOUT", "60")),
+        )
 
-    async def review_with_loop(self, claim: str, source: str, max_retries: int = 5) -> tuple[bool, str]:
-        """审阅闭环：助手生成 → 审阅核查 → 不通过则重新生成，最多 5 次。
+    def is_configured(self, role: AIRole) -> bool:
+        cfg = self.configs[role]
+        return bool(cfg.api_key and cfg.endpoint)
 
-        对应 SPEC：§四.3 事实核查规则 - 核查流程
-        返回：(是否通过, 最终内容 or 失败原因)
-        """
-        # TODO: 实现 5 次循环 + 写审阅日志到 reviewer.md
-        raise NotImplementedError
+    def chat(
+        self,
+        role: AIRole,
+        system: str,
+        user: str,
+        *,
+        extra: Optional[dict[str, Any]] = None,
+    ) -> AIResult:
+        """统一 chat 调用，失败时降级返回 success=False。"""
+        cfg = self.configs[role]
+        if not self.is_configured(role):
+            return AIResult(
+                success=False,
+                role=role,
+                error=f"[{role.value}] 未配置 API key / endpoint，已降级。",
+            )
+        payload = {
+            "model": cfg.model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+        }
+        if extra:
+            payload.update(extra)
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            cfg.endpoint,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {cfg.api_key}",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=cfg.timeout) as resp:
+                raw = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.URLError as e:
+            logger.warning("[%s] AI 接口失败：%s", role.value, e)
+            return AIResult(success=False, role=role, error=str(e))
+        except Exception as e:  # noqa: BLE001
+            logger.exception("[%s] AI 接口异常", role.value)
+            return AIResult(success=False, role=role, error=str(e))
+
+        output = self._extract_text(raw)
+        return AIResult(success=True, role=role, output=output, raw=raw)
+
+    @staticmethod
+    def _extract_text(raw: dict[str, Any]) -> str:
+        # 兼容 OpenAI 风格 + 简易直返字段
+        if "choices" in raw and raw["choices"]:
+            msg = raw["choices"][0].get("message") or {}
+            if isinstance(msg, dict) and "content" in msg:
+                return str(msg["content"])
+        if "output" in raw:
+            return str(raw["output"])
+        if "text" in raw:
+            return str(raw["text"])
+        return ""
+
+    # --------- 语义包装：给上层用 ----------
+
+    def assistant_draft(self, system: str, user: str) -> AIResult:
+        return self.chat(AIRole.ASSISTANT, system, user)
+
+    def auditor_check(self, system: str, user: str) -> AIResult:
+        return self.chat(AIRole.AUDITOR, system, user)
+
+    def secretary_plan(self, system: str, user: str) -> AIResult:
+        return self.chat(AIRole.SECRETARY, system, user)

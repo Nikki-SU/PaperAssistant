@@ -1,9 +1,16 @@
-"""阶段五：排版。LaTeX 模板迭代 → Markdown↔LaTeX 实时预览
+"""stage: typesetting
 
-对应 SPEC：项目二 §七.5 排版
+TODO: 实现 SPEC §二 中关于「typesetting」阶段的具体业务。
+当前仅提供占位入口，便于 main.py 引用与阶段切换。
 """
 from __future__ import annotations
 
+STAGE_NAME = "typesetting"
 
-# TODO: 实现该阶段的业务逻辑入口函数
-# 该模块通常由 api/ 层调用，并依赖 services.ai_orchestrator + storage
+
+def describe() -> dict:
+    return {
+        "stage": STAGE_NAME,
+        "status": "skeleton",
+        "todo": True,
+    }

@@ -1,22 +1,48 @@
-"""排版 API：LaTeX 模板、Markdown→LaTeX、PDF 编译（Tectonic）。
+"""排版导出 API。
 
-对应 SPEC：项目二 §七.5 排版
+SPEC §五 + §九：用 Tectonic（内嵌 LaTeX 引擎）+ CSL 输出 PDF。
+当前为骨架：
+- POST /api/typesetting/{project}/export  → 把 paper/*.md 合并为 manuscript.md 并返回路径
+- Tectonic 真实编译留 TODO（云端无法编译；本地由用户安装 Tectonic）
 """
 from __future__ import annotations
+
+from pathlib import Path
+
 from fastapi import APIRouter, HTTPException
 
-router = APIRouter()
+from ..config import get_settings
+from ..storage import now_iso, read_text, write_text
+
+router = APIRouter(prefix="/api/typesetting", tags=["typesetting"])
 
 
-@router.post("/{project}/template")
-def generate_template(project: str, format_spec: str) -> dict:
-    """根据用户粘贴的格式要求生成 LaTeX 模板骨架。"""
-    # TODO: 调助手 AI 生成 .tex 模板
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+def _paper_dir(project: str) -> Path:
+    return get_settings().projects_dir / project / "paper"
 
 
-@router.post("/{project}/compile")
-def compile_pdf(project: str) -> dict:
-    """Markdown → LaTeX → Tectonic 编译为 PDF。"""
-    # TODO: 1) 替换引用标记 [@doi:xxx]；2) md→tex；3) tectonic compile
-    raise HTTPException(status_code=501, detail="Not implemented yet")
+@router.post("/{project}/export")
+def export_manuscript(project: str) -> dict:
+    paper_dir = _paper_dir(project)
+    if not paper_dir.exists():
+        raise HTTPException(status_code=404, detail="项目论文目录不存在")
+    mds = sorted(paper_dir.glob("*.md"))
+    if not mds:
+        raise HTTPException(status_code=404, detail="paper/ 下没有任何 Markdown 章节")
+
+    parts: list[str] = [f"<!-- exported_at: {now_iso()} -->\n"]
+    for md in mds:
+        parts.append(f"\n\n<!-- file: {md.name} -->\n")
+        parts.append(read_text(md))
+    out = paper_dir / "manuscript.md"
+    write_text(out, "\n".join(parts))
+
+    return {
+        "project": project,
+        "manuscript_path": str(out),
+        "chapters": [m.name for m in mds],
+        "tectonic": {
+            "todo": True,
+            "note": "Tectonic 编译为 PDF 留待本地实现；当前仅导出 manuscript.md。",
+        },
+    }

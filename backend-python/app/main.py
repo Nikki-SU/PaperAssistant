@@ -1,47 +1,114 @@
-"""PaperAssistant FastAPI 入口。
+"""PaperAssistant backend FastAPI 入口。
 
-由 Tauri sidecar 启动并管理生命周期。
+- 监听 127.0.0.1:8181
+- 启动时初始化 debug-assistant SDK（连不上时静默降级）
+- 所有路由前缀 /api
 """
 from __future__ import annotations
+
+import logging
+import os
+import sys
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .config import SETTINGS
-from .api import project, literature, citation, typesetting
+from .api import citation, health, literature, project, typesetting
+from .config import get_settings
 
-app = FastAPI(
-    title="PaperAssistant",
-    version="0.1.0",
-    description="Local-first academic writing assistant backend",
-)
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-app.include_router(project.router, prefix="/api/project", tags=["project"])
-app.include_router(literature.router, prefix="/api/literature", tags=["literature"])
-app.include_router(citation.router, prefix="/api/citation", tags=["citation"])
-app.include_router(typesetting.router, prefix="/api/typesetting", tags=["typesetting"])
+logger = logging.getLogger("paperassistant")
 
 
-@app.get("/api/health")
-def health() -> dict:
-    return {"status": "ok", "version": "0.1.0"}
+def _init_debug_assistant() -> None:
+    """尝试加载 debug-assistant Python SDK。
+
+    SDK 默认存在两条路径：
+    1. pip install debug-assistant 后通过 ``debug_assistant`` 包导入；
+    2. 如果开发态没装包，从环境变量 DA_SDK_PATH 加载源码。
+    任何失败都静默降级，不能阻塞 PaperAssistant 启动。
+    """
+    settings = get_settings()
+    if not settings.debug_assistant_enabled:
+        logger.info("debug-assistant: 已通过配置禁用")
+        return
+
+    sdk_path = os.environ.get("DA_SDK_PATH")
+    if sdk_path and Path(sdk_path).exists():
+        sys.path.insert(0, sdk_path)
+
+    try:
+        from debug_assistant import Debugger, set_default  # type: ignore
+    except Exception as e:  # noqa: BLE001
+        logger.warning("debug-assistant SDK 不可用，已降级：%s", e)
+        return
+
+    try:
+        dbg = Debugger(
+            host=settings.debug_assistant_host,
+            port=settings.debug_assistant_port,
+            project="PaperAssistant",
+        )
+        set_default(dbg)
+        logger.info(
+            "debug-assistant 已接入：http://%s:%s",
+            settings.debug_assistant_host,
+            settings.debug_assistant_port,
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("debug-assistant 初始化失败，已降级：%s", e)
 
 
-def run() -> None:
+def create_app() -> FastAPI:
+    settings = get_settings()
+    logging.basicConfig(
+        level=getattr(logging, settings.log_level.upper(), logging.INFO),
+        format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    )
+    settings.ensure_dirs()
+
+    app = FastAPI(
+        title="PaperAssistant Backend",
+        version="0.1.0",
+        description="本地优先的学术写作辅助后端（SPEC v0.1）",
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:1421", "http://127.0.0.1:1421",
+                       "tauri://localhost", "https://tauri.localhost"],
+        allow_credentials=False,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    app.include_router(health.router)
+    app.include_router(project.router)
+    app.include_router(literature.router)
+    app.include_router(citation.router)
+    app.include_router(typesetting.router)
+
+    @app.on_event("startup")
+    def _on_startup() -> None:
+        _init_debug_assistant()
+        logger.info("PaperAssistant data_root = %s", settings.data_root)
+
+    return app
+
+
+app = create_app()
+
+
+def main() -> None:
     import uvicorn
+
+    settings = get_settings()
     uvicorn.run(
         "app.main:app",
-        host=SETTINGS.host,
-        port=SETTINGS.port,
-        log_level=SETTINGS.log_level.lower(),
+        host=settings.host,
+        port=settings.port,
+        reload=False,
     )
 
 
 if __name__ == "__main__":
-    run()
+    main()

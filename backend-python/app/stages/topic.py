@@ -1,9 +1,16 @@
-"""阶段一：选题。学科判断 → 知识库教材 → 推荐选题
+"""stage: topic
 
-对应 SPEC：项目二 §七.1 选题
+TODO: 实现 SPEC §二 中关于「topic」阶段的具体业务。
+当前仅提供占位入口，便于 main.py 引用与阶段切换。
 """
 from __future__ import annotations
 
+STAGE_NAME = "topic"
 
-# TODO: 实现该阶段的业务逻辑入口函数
-# 该模块通常由 api/ 层调用，并依赖 services.ai_orchestrator + storage
+
+def describe() -> dict:
+    return {
+        "stage": STAGE_NAME,
+        "status": "skeleton",
+        "todo": True,
+    }
