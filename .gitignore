@@ -1,0 +1,78 @@
+# ===== Python =====
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.venv/
+venv/
+env/
+ENV/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# ===== Node / pnpm / npm / yarn =====
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# ===== Vite / React build =====
+dist/
+dist-ssr/
+*.local
+.vite/
+
+# ===== Tauri =====
+src-tauri/target/
+src-tauri/Cargo.lock
+src-tauri/WixTools/
+
+# ===== Rust =====
+target/
+**/*.rs.bk
+
+# ===== IDE =====
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+.trae/
+
+# ===== Env / Secrets =====
+.env
+.env.local
+.env.*.local
+*.key
+secrets.json
+
+# ===== Logs =====
+*.log
+logs/
+
+# ===== OS =====
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ===== 运行时数据 =====
+runtime_data/
+temp/
