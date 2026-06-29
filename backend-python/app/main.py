@@ -7,56 +7,47 @@
 from __future__ import annotations
 
 import logging
-import os
-import sys
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import citation, health, literature, project, settings as settings_api, typesetting
+from .api import (
+    ai as ai_api,
+    citation,
+    health,
+    literature,
+    project,
+    settings as settings_api,
+    typesetting,
+)
 from .config import get_settings
+from .lib import debug_assistant as da
 
 logger = logging.getLogger("paperassistant")
 
 
 def _init_debug_assistant() -> None:
-    """尝试加载 debug-assistant Python SDK。
-
-    SDK 默认存在两条路径：
-    1. pip install debug-assistant 后通过 ``debug_assistant`` 包导入；
-    2. 如果开发态没装包，从环境变量 DA_SDK_PATH 加载源码。
-    任何失败都静默降级，不能阻塞 PaperAssistant 启动。
-    """
+    """初始化内联 debug-assistant 客户端，连不上 server 时静默降级。"""
     settings = get_settings()
-    if not settings.debug_assistant_enabled:
+    da.init(
+        project="PaperAssistant",
+        module="backend",
+        host=settings.debug_assistant_host,
+        port=settings.debug_assistant_port,
+        enabled=settings.debug_assistant_enabled,
+    )
+    if settings.debug_assistant_enabled:
+        hc = da.health()
+        if hc is None:
+            logger.warning(
+                "debug-assistant server 未在 %s:%s 响应，运行时会静默降级",
+                settings.debug_assistant_host,
+                settings.debug_assistant_port,
+            )
+        else:
+            logger.info("debug-assistant 已就绪：%s", hc)
+    else:
         logger.info("debug-assistant: 已通过配置禁用")
-        return
-
-    sdk_path = os.environ.get("DA_SDK_PATH")
-    if sdk_path and Path(sdk_path).exists():
-        sys.path.insert(0, sdk_path)
-
-    try:
-        from debug_assistant import Debugger, set_default  # type: ignore
-    except Exception as e:  # noqa: BLE001
-        logger.warning("debug-assistant SDK 不可用，已降级：%s", e)
-        return
-
-    try:
-        dbg = Debugger(
-            host=settings.debug_assistant_host,
-            port=settings.debug_assistant_port,
-            project="PaperAssistant",
-        )
-        set_default(dbg)
-        logger.info(
-            "debug-assistant 已接入：http://%s:%s",
-            settings.debug_assistant_host,
-            settings.debug_assistant_port,
-        )
-    except Exception as e:  # noqa: BLE001
-        logger.warning("debug-assistant 初始化失败，已降级：%s", e)
 
 
 def create_app() -> FastAPI:
@@ -69,7 +60,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="PaperAssistant Backend",
-        version="0.1.0",
+        version="0.2.0",
         description="本地优先的学术写作辅助后端（SPEC v0.1）",
     )
     app.add_middleware(
@@ -87,6 +78,7 @@ def create_app() -> FastAPI:
     app.include_router(citation.router)
     app.include_router(typesetting.router)
     app.include_router(settings_api.router)
+    app.include_router(ai_api.router)
 
     @app.on_event("startup")
     def _on_startup() -> None:

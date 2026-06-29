@@ -74,6 +74,45 @@ export interface SettingsSnapshot {
   custom_fields: CustomFieldRow[];
 }
 
+
+
+export type AIRole = "assistant" | "auditor" | "secretary";
+
+export interface AIChatMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface AIChatRequest {
+  role?: AIRole;
+  messages: AIChatMessage[];
+  project?: string;
+  stage?: string;
+  extra?: Record<string, unknown>;
+}
+
+export interface AIChatResponse {
+  success: boolean;
+  role: string;
+  effective_role: string;
+  output: string;
+  audit_status: "verified" | "suggestion" | "user" | "error";
+  error: string;
+  error_code: string;
+  project?: string | null;
+  stage?: string | null;
+}
+
+export interface AIRoleStatus {
+  role: string;
+  configured: boolean;
+  has_endpoint: boolean;
+  has_key: boolean;
+  has_model: boolean;
+  endpoint: string;
+  model: string;
+}
+
 async function _json<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   let resp: Response;
   try {
@@ -269,5 +308,23 @@ export const api = {
     }>(`${BASE}/api/typesetting/${encodeURIComponent(project)}/export`, {
       method: "POST",
     });
+  },
+
+  // ---------- ai ----------
+  aiChat(input: AIChatRequest) {
+    return _json<AIChatResponse>(`${BASE}/api/ai/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        role: input.role ?? "assistant",
+        messages: input.messages,
+        project: input.project ?? null,
+        stage: input.stage ?? null,
+        extra: input.extra ?? null,
+      }),
+    });
+  },
+  aiStatus() {
+    return _json<{ items: AIRoleStatus[] }>(`${BASE}/api/ai/status`);
   },
 };

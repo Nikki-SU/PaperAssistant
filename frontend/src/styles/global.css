@@ -579,3 +579,82 @@ button { font: inherit; cursor: pointer; }
 }
 .toast-error { background: #b91c1c; }
 .toast-ok { background: #047857; }
+
+/* === B 计划新增：AI 角色 tabs + 错误态 + CTA + 角色描述 === */
+.ai-role-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 6px 10px;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  flex-wrap: wrap;
+}
+.role-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #4b5563;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.role-tab:hover {
+  background: #f3f4f6;
+}
+.role-tab.active {
+  background: #2563eb;
+  color: #fff;
+  border-color: #2563eb;
+}
+.role-tab-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef4444;
+}
+.role-tab.active .role-tab-dot {
+  background: #fff;
+}
+.role-tab[data-configured="true"] .role-tab-dot {
+  background: #10b981;
+}
+.audit-badge.audit-error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+.ai-msg-cta {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #2563eb;
+}
+.ai-msg-cta a {
+  color: #2563eb;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.role-desc {
+  padding: 6px 10px;
+  font-size: 11px;
+  color: #6b7280;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.role-key-link {
+  color: #2563eb;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 11px;
+}
+.role-hint {
+  color: #6b7280;
+  font-size: 11px;
+  font-style: italic;
+}

@@ -4,6 +4,9 @@
  * - 数据根目录（切换需重启提示）
  * - 监控目录
  * - 4 个 AI 接口位（mineru/assistant/auditor/secretary）—— Key 不回显，只显 set/unset
+ *   - endpoint 预填官方地址，用户可改
+ *   - model 留空，不预填，给 placeholder 指引
+ *   - 每个角色附「获取 Key」官方链接 + 简短教程提示
  *
  * 首次启动时由 FirstRunDialog 自动打开（如果 is_default_root && key 全空）。
  */
@@ -18,11 +21,53 @@ interface Props {
   notify: (text: string, kind?: "ok" | "warn" | "error") => void;
 }
 
-const ROLE_LABELS: Record<string, string> = {
-  mineru:    "MinerU（PDF 解析）",
-  assistant: "助手 AI（主对话）",
-  auditor:   "审阅 AI（事实核查）",
-  secretary: "秘书 AI（修订记录）",
+interface RoleMeta {
+  label: string;
+  desc: string;
+  keyUrl: string;
+  keyUrlLabel: string;
+  hint: string;
+  modelPlaceholder: string;
+  endpointPlaceholder: string;
+}
+
+const ROLE_META: Record<string, RoleMeta> = {
+  mineru: {
+    label: "MinerU（PDF 解析）",
+    desc: "把上传的 PDF 转成可结构化的 Markdown，是文献入库的第一步。",
+    keyUrl: "https://mineru.net/apiManage/token",
+    keyUrlLabel: "去 mineru.net 申请 API Token",
+    hint: "登录 mineru.net → 控制台 → API 管理 → 创建 Token，复制粘贴到下方。每日有免费额度。",
+    modelPlaceholder: "MinerU 不需要填 model，留空即可",
+    endpointPlaceholder: "https://mineru.net/api/v4",
+  },
+  assistant: {
+    label: "助手 AI（主对话）",
+    desc: "默认对话角色，写综述、起草章节、做思路探索都走它。",
+    keyUrl: "https://platform.deepseek.com/api_keys",
+    keyUrlLabel: "去 platform.deepseek.com 申请 API Key",
+    hint: "推荐 DeepSeek：注册账号 → API Keys → Create new key。也可填其他 OpenAI 兼容服务的 Key。",
+    modelPlaceholder: "如 deepseek-chat / deepseek-reasoner",
+    endpointPlaceholder: "https://api.deepseek.com/v1",
+  },
+  auditor: {
+    label: "审阅 AI（事实核查）",
+    desc: "对助手生成内容做事实核查（SPEC §4.3）；建议用更强或更严谨的模型。",
+    keyUrl: "https://platform.deepseek.com/api_keys",
+    keyUrlLabel: "去 platform.deepseek.com 申请 API Key",
+    hint: "可以和助手共用 Key、用不同 model；也可以接独立账号防止额度互相抢。",
+    modelPlaceholder: "如 deepseek-reasoner（更严谨）",
+    endpointPlaceholder: "https://api.deepseek.com/v1",
+  },
+  secretary: {
+    label: "秘书 AI（错别字/语法）",
+    desc: "做修订和润色等轻量任务；未配置时系统会自动回退到助手。",
+    keyUrl: "https://platform.deepseek.com/api_keys",
+    keyUrlLabel: "去 platform.deepseek.com 申请 API Key",
+    hint: "可选。不填则修订环节复用助手 Key/Model。",
+    modelPlaceholder: "如 deepseek-chat（轻量任务）",
+    endpointPlaceholder: "https://api.deepseek.com/v1",
+  },
 };
 
 export function SettingsDialog({ open, onClose, onSaved, notify }: Props) {
@@ -139,6 +184,10 @@ export function SettingsDialog({ open, onClose, onSaved, notify }: Props) {
 
         <section className="settings-section">
           <h4>AI 接口位（4 个角色）</h4>
+          <p className="muted-small">
+            所有 Key 由你本人在此填写，软件不会内置任何 Key。Key 保存在
+            <code> data_root/config/api_keys.secret</code>（仅本机权限 600），永不上传、永不回显明文。
+          </p>
           {(snap?.api_roles ?? []).map((r) => (
             <ApiRoleEditor
               key={r.role}
@@ -159,6 +208,15 @@ function ApiRoleEditor(props: {
   onSave: (newKey: string | null, draft: Partial<ApiRoleConfig>) => void;
 }) {
   const { role, busy, onSave } = props;
+  const meta = ROLE_META[role.role] ?? {
+    label: role.role,
+    desc: "",
+    keyUrl: "",
+    keyUrlLabel: "",
+    hint: "",
+    modelPlaceholder: "如 gpt-4o / doubao-pro",
+    endpointPlaceholder: "如 https://api.openai.com/v1",
+  };
   const [endpoint, setEndpoint] = useState(role.endpoint);
   const [model, setModel] = useState(role.model);
   const [timeout_, setTimeout_] = useState(role.timeout || "120");
@@ -167,11 +225,18 @@ function ApiRoleEditor(props: {
   return (
     <div className="api-role-card">
       <div className="api-role-head">
-        <strong>{ROLE_LABELS[role.role] ?? role.role}</strong>
+        <strong>{meta.label}</strong>
         <span className={role.api_key_set ? "badge-ok" : "badge-warn"}>
           {role.api_key_set ? "● Key 已配置" : "● 未配置"}
         </span>
       </div>
+      {meta.desc && <p className="muted-small role-desc">{meta.desc}</p>}
+      {meta.keyUrl && (
+        <p className="muted-small role-key-link">
+          🔑 <a href={meta.keyUrl} target="_blank" rel="noreferrer">{meta.keyUrlLabel}</a>
+          {meta.hint && <span className="role-hint"> · {meta.hint}</span>}
+        </p>
+      )}
       <div className="grid-2">
         <label>
           Endpoint
@@ -179,7 +244,7 @@ function ApiRoleEditor(props: {
             className="text-input"
             value={endpoint}
             onChange={(e) => setEndpoint(e.target.value)}
-            placeholder="如 https://api.openai.com/v1"
+            placeholder={meta.endpointPlaceholder}
           />
         </label>
         <label>
@@ -188,7 +253,7 @@ function ApiRoleEditor(props: {
             className="text-input"
             value={model}
             onChange={(e) => setModel(e.target.value)}
-            placeholder="如 gpt-4o / doubao-pro"
+            placeholder={meta.modelPlaceholder}
           />
         </label>
         <label>
