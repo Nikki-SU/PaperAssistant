@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .api import citation, health, literature, project, typesetting
+from .api import citation, health, literature, project, settings as settings_api, typesetting
 from .config import get_settings
 
 logger = logging.getLogger("paperassistant")
@@ -86,6 +86,7 @@ def create_app() -> FastAPI:
     app.include_router(literature.router)
     app.include_router(citation.router)
     app.include_router(typesetting.router)
+    app.include_router(settings_api.router)
 
     @app.on_event("startup")
     def _on_startup() -> None:

@@ -18,5 +18,5 @@ export function Toast({
     return () => clearTimeout(t);
   }, [msg, onClose]);
   if (!msg) return null;
-  return <div className={`toast ${msg.kind ?? "info"}`}>{msg.text}</div>;
+  return <div className={`toast toast-${msg.kind ?? "info"}`}>{msg.text}</div>;
 }

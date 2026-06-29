@@ -140,12 +140,20 @@ class ProjectRename(BaseModel):
     new_name: str
 
 
+
+def _decorate_project(row: dict) -> dict:
+    """给 project dict 附加 is_placeholder_name 标志，供前端 UI 用。"""
+    out = dict(row)
+    out["is_placeholder_name"] = bool(out.get("name", "").startswith("未命名-"))
+    return out
+
+
 @router.get("")
 def list_projects() -> dict:
     ensure_csv(_projects_index_csv(), PROJECTS_INDEX_HEADERS)
     rows = read_rows(_projects_index_csv())
     rows.sort(key=lambda r: r.get("last_modified", ""), reverse=True)
-    return {"projects": rows}
+    return {"projects": [_decorate_project(r) for r in rows]}
 
 
 @router.post("")
@@ -172,7 +180,7 @@ def create_project(body: ProjectCreate) -> dict:
     ensure_csv(_project_meta_csv(name), PROJECT_META_HEADERS)
     append_row(_project_meta_csv(name), PROJECT_META_HEADERS, row)
     upsert_row(_projects_index_csv(), PROJECTS_INDEX_HEADERS, row, primary_key="name")
-    return {"project": row, "is_placeholder_name": name.startswith("未命名-")}
+    return {"project": _decorate_project(row), "is_placeholder_name": name.startswith("未命名-")}
 
 
 @router.get("/{name}")
@@ -185,7 +193,7 @@ def get_project(name: str) -> dict:
         rows = read_rows(_project_meta_csv(name))
     if not rows:
         raise HTTPException(status_code=404, detail=f"项目元信息缺失：{name}")
-    return {"project": rows[-1]}
+    return {"project": _decorate_project(rows[-1])}
 
 
 @router.patch("/{name}")
@@ -223,7 +231,7 @@ def rename_project(name: str, body: ProjectRename) -> dict:
     new_name = body.new_name.strip()
     _validate_name(new_name)
     if new_name == name:
-        return {"project": filter_rows(_projects_index_csv(), where={"name": name})[-1], "renamed": False}
+        return {"project": _decorate_project(filter_rows(_projects_index_csv(), where={"name": name})[-1]), "renamed": False, "old_name": name, "new_name": name}
 
     old_dir = _project_dir(name)
     new_dir = _project_dir(new_name)
@@ -244,7 +252,7 @@ def rename_project(name: str, body: ProjectRename) -> dict:
     ensure_csv(_project_meta_csv(new_name), PROJECT_META_HEADERS)
     upsert_row(_project_meta_csv(new_name), PROJECT_META_HEADERS, base, primary_key="name")
 
-    return {"project": base, "renamed": True, "old_name": name}
+    return {"project": _decorate_project(base), "renamed": True, "old_name": name, "new_name": base["name"]}
 
 
 @router.delete("/{name}")

@@ -17,6 +17,7 @@ export interface Project {
   topic: string;
   created_at: string;
   last_modified: string;
+  is_placeholder_name?: boolean;
 }
 
 export interface LiteratureCard {
@@ -40,6 +41,37 @@ export interface CitationRow {
   used_in: string;
   note: string;
   added_at: string;
+}
+
+export interface ApiRoleConfig {
+  role: string;
+  endpoint: string;
+  model: string;
+  api_key_set: boolean;
+  timeout: string;
+  last_modified: string;
+}
+
+export interface CategoryRow {
+  perspective: string;
+  category: string;
+  subcategory: string;
+}
+
+export interface CustomFieldRow {
+  field_name: string;
+  field_type: string;
+  description: string;
+}
+
+export interface SettingsSnapshot {
+  data_root: string;
+  monitor_dir: string;
+  is_default_root: boolean;
+  pointer_file: string;
+  api_roles: ApiRoleConfig[];
+  categories: CategoryRow[];
+  custom_fields: CustomFieldRow[];
 }
 
 async function _json<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -70,18 +102,79 @@ async function _json<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  // health
+  // ---------- health ----------
   health() {
     return _json<{ status: string; service: string; data_root: string }>(
       `${BASE}/api/health`
     );
   },
 
-  // project
+  // ---------- settings ----------
+  getSettings() {
+    return _json<SettingsSnapshot>(`${BASE}/api/settings`);
+  },
+  setDataRoot(path: string) {
+    return _json<{ ok: boolean; data_root: string; monitor_dir: string; is_default_root: boolean }>(
+      `${BASE}/api/settings/data-root`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      }
+    );
+  },
+  setMonitorDir(path: string) {
+    return _json<{ ok: boolean; monitor_dir: string }>(`${BASE}/api/settings/monitor-dir`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+  },
+  listApiConfig() {
+    return _json<{ items: ApiRoleConfig[] }>(`${BASE}/api/settings/api-config`);
+  },
+  saveApiConfig(input: {
+    role: string;
+    endpoint?: string;
+    model?: string;
+    api_key?: string | null;
+    timeout?: number;
+  }) {
+    return _json<{ ok: boolean; role: string; api_key_set: boolean }>(
+      `${BASE}/api/settings/api-config`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+  },
+  saveCategories(items: CategoryRow[]) {
+    return _json<{ ok: boolean; count: number }>(
+      `${BASE}/api/settings/category-config`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      }
+    );
+  },
+  saveCustomFields(items: CustomFieldRow[]) {
+    return _json<{ ok: boolean; count: number }>(
+      `${BASE}/api/settings/custom-fields`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      }
+    );
+  },
+
+  // ---------- project ----------
   listProjects() {
     return _json<{ projects: Project[] }>(`${BASE}/api/project`);
   },
-  createProject(input: { name: string; topic?: string; perspective?: string }) {
+  createProject(input: { name?: string; topic?: string; perspective?: string }) {
     return _json<{ project: Project }>(`${BASE}/api/project`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -101,6 +194,16 @@ export const api = {
       }
     );
   },
+  renameProject(oldName: string, newName: string) {
+    return _json<{ project: Project; old_name: string; new_name: string }>(
+      `${BASE}/api/project/${encodeURIComponent(oldName)}/rename`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ new_name: newName }),
+      }
+    );
+  },
   deleteProject(name: string) {
     return _json<{ name: string; deleted_from_index: boolean }>(
       `${BASE}/api/project/${encodeURIComponent(name)}`,
@@ -108,7 +211,7 @@ export const api = {
     );
   },
 
-  // literature
+  // ---------- literature ----------
   listLiterature(q?: string) {
     const u = new URL(`${BASE}/api/literature`);
     if (q) u.searchParams.set("q", q);
@@ -137,7 +240,7 @@ export const api = {
     }>(u.toString(), { method: "POST", body: fd });
   },
 
-  // citation
+  // ---------- citation ----------
   listCitations(project: string) {
     return _json<{ citations: CitationRow[] }>(
       `${BASE}/api/citation/${encodeURIComponent(project)}`
@@ -157,7 +260,7 @@ export const api = {
     );
   },
 
-  // typesetting
+  // ---------- typesetting ----------
   exportManuscript(project: string) {
     return _json<{
       project: string;
