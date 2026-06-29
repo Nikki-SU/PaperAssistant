@@ -1,0 +1,9 @@
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.9.0
+httpx>=0.27.0
+python-multipart>=0.0.12
+# 引用格式化（CSL，纯本地）
+citeproc-py>=0.7.0
+# 调试助手 SDK（开发期接入）
+# debug-assistant>=0.1.0  # 待 SDK 包发布后启用

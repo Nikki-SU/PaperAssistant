@@ -1,0 +1,33 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif; }
+
+.app { display: flex; height: 100vh; }
+
+.sidebar {
+  width: 240px;
+  background: #1a1b26;
+  color: #c0caf5;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.sidebar h1 { font-size: 18px; margin-bottom: 8px; }
+.sidebar h2 { font-size: 13px; color: #7aa2f7; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px; }
+.sidebar nav { display: flex; flex-direction: column; gap: 4px; }
+.sidebar button {
+  background: transparent;
+  border: none;
+  color: #c0caf5;
+  padding: 8px 12px;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 14px;
+}
+.sidebar button:hover, .sidebar button.active { background: #292e42; color: #7dcfff; }
+.placeholder { color: #565f89; font-size: 13px; font-style: italic; }
+
+.workspace { flex: 1; padding: 24px; overflow: auto; background: #fafafa; }
+.stage h2 { margin-bottom: 16px; }
+.empty-state { color: #888; font-size: 14px; padding: 40px; text-align: center; }
