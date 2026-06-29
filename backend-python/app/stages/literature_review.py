@@ -1,9 +1,10 @@
-"""阶段二：文献综述。检索 → 上传 → 按话题归纳（经审计） → 勾选
-
-对应 SPEC：项目二 §七.2 文献综述
-"""
+"""历史命名模块：转发到 review.py。"""
 from __future__ import annotations
 
+from . import review
 
-# TODO: 实现该阶段的业务逻辑入口函数
-# 该模块通常由 api/ 层调用，并依赖 services.ai_orchestrator + storage
+STAGE_NAME = review.STAGE_NAME
+STAGE_LABEL = review.STAGE_LABEL
+describe = review.describe
+on_enter = review.on_enter
+on_exit = review.on_exit

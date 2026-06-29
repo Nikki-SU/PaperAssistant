@@ -76,6 +76,57 @@ export interface SettingsSnapshot {
 
 
 
+export interface StageStep {
+  id: number;
+  title: string;
+  actor: string;
+  audit: string;
+}
+
+export interface StageInfo {
+  stage: string;
+  label: string;
+  default_left_pane: string;
+  default_right_pane: string;
+  steps: StageStep[];
+  intro_md: string;
+  expected_panels: string[];
+  audit_hint: string;
+  all_stages?: StageInfo[];
+}
+
+export interface SelectionRow {
+  doi: string;
+  stage: string;
+  selected: string; // "true" / "false"（CSV 持久化为字符串）
+  source_label: string;
+  note: string;
+  updated_at: string;
+}
+
+export interface SelectionInput {
+  doi: string;
+  stage: string;
+  selected: boolean;
+  source_label?: string;
+  note?: string;
+}
+
+export interface AggregateResult {
+  written: number;
+  by_stage_selected_count: Record<string, number>;
+  empty_stages: string[];
+  skipped_no_doi: number;
+  selected_csv_path: string;
+}
+
+export interface ProjectWithStage {
+  project: Project;
+  stage_info?: StageInfo;
+  stage_changed?: boolean;
+  is_placeholder_name?: boolean;
+}
+
 export type AIRole = "assistant" | "auditor" | "secretary";
 
 export interface AIChatMessage {
@@ -329,7 +380,7 @@ export const api = {
     return _json<{ projects: Project[] }>(`${BASE}/api/project`);
   },
   createProject(input: { name?: string; topic?: string; perspective?: string }) {
-    return _json<{ project: Project }>(`${BASE}/api/project`, {
+    return _json<ProjectWithStage>(`${BASE}/api/project`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
@@ -339,7 +390,7 @@ export const api = {
     name: string,
     patch: { stage?: string; perspective?: string; topic?: string }
   ) {
-    return _json<{ project: Project }>(
+    return _json<ProjectWithStage>(
       `${BASE}/api/project/${encodeURIComponent(name)}`,
       {
         method: "PATCH",
@@ -613,5 +664,52 @@ export const api = {
     const u = new URL(`${BASE}/api/file_watcher/processed`);
     if (limit !== undefined) u.searchParams.set("limit", String(limit));
     return _json<{ items: Record<string, string>[]; total: number }>(u.toString());
+  },
+
+  // ---------- G 阶段：stage-info + selections（SPEC §六 / §7.1-7.5） ----------
+  getStageInfo(project: string, stage?: string) {
+    const u = new URL(`${BASE}/api/project/${encodeURIComponent(project)}/stage-info`);
+    if (stage) u.searchParams.set("stage", stage);
+    return _json<{ current: StageInfo; all_stages: StageInfo[] }>(u.toString());
+  },
+  listSelections(project: string, stage?: string) {
+    const u = new URL(`${BASE}/api/project/${encodeURIComponent(project)}/selections`);
+    if (stage) u.searchParams.set("stage", stage);
+    return _json<{ selections: SelectionRow[]; by_stage: Record<string, { selected: number; deselected: number }> }>(u.toString());
+  },
+  saveSelection(project: string, input: SelectionInput) {
+    return _json<{ selection: SelectionRow; total: number }>(
+      `${BASE}/api/project/${encodeURIComponent(project)}/selections`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+  },
+  saveSelectionsBulk(project: string, items: SelectionInput[]) {
+    return _json<{ saved: SelectionRow[]; count: number }>(
+      `${BASE}/api/project/${encodeURIComponent(project)}/selections/bulk`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      }
+    );
+  },
+  deleteSelection(project: string, doi: string, stage: string) {
+    const u = new URL(`${BASE}/api/project/${encodeURIComponent(project)}/selections`);
+    u.searchParams.set("doi", doi);
+    u.searchParams.set("stage", stage);
+    return _json<{ doi: string; stage: string; removed: boolean; remaining: number }>(
+      u.toString(),
+      { method: "DELETE" }
+    );
+  },
+  aggregateSelections(project: string) {
+    return _json<AggregateResult>(
+      `${BASE}/api/project/${encodeURIComponent(project)}/selections/aggregate`,
+      { method: "POST" }
+    );
   },
 };

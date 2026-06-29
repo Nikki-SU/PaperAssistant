@@ -30,6 +30,7 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from ..config import get_settings
+from ..stages import STAGE_REGISTRY, get_stage, list_stages
 from ..storage import (
     append_row,
     ensure_csv,
@@ -181,7 +182,21 @@ def create_project(body: ProjectCreate) -> dict:
     ensure_csv(_project_meta_csv(name), PROJECT_META_HEADERS)
     append_row(_project_meta_csv(name), PROJECT_META_HEADERS, row)
     upsert_row(_projects_index_csv(), PROJECTS_INDEX_HEADERS, row, primary_key="name")
-    return {"project": _decorate_project(row), "is_placeholder_name": name.startswith("未命名-")}
+
+    # SPEC §六：进入初始阶段（topic），触发 on_enter 副作用
+    try:
+        get_stage("topic").on_enter(proj_dir, name, now)
+    except Exception as exc:  # noqa: BLE001
+        _log_stage_error(proj_dir, "topic", "on_enter", exc)
+
+    stage_info = get_stage("topic").describe()
+    stage_info["all_stages"] = list_stages()
+    return {
+        "project": _decorate_project(row),
+        "is_placeholder_name": name.startswith("未命名-"),
+        "stage_info": stage_info,
+        "stage_changed": True,
+    }
 
 
 @router.get("/{name}")
@@ -200,7 +215,8 @@ def get_project(name: str) -> dict:
 @router.patch("/{name}")
 def update_project(name: str, body: ProjectUpdate) -> dict:
     _validate_name(name)
-    if not _project_dir(name).exists():
+    proj_dir = _project_dir(name)
+    if not proj_dir.exists():
         raise HTTPException(status_code=404, detail=f"项目不存在：{name}")
     if body.stage is not None and body.stage not in VALID_STAGES:
         raise HTTPException(status_code=400, detail=f"非法 stage：{body.stage}")
@@ -209,17 +225,63 @@ def update_project(name: str, body: ProjectUpdate) -> dict:
 
     rows = filter_rows(_projects_index_csv(), where={"name": name})
     base = rows[-1] if rows else {"name": name}
-    if body.stage is not None:
+    old_stage = base.get("stage", "topic")
+    stage_changed = False
+
+    if body.stage is not None and body.stage != old_stage:
+        stage_changed = True
+        base["stage"] = body.stage
+    elif body.stage is not None:
         base["stage"] = body.stage
     if body.perspective is not None:
         base["perspective"] = body.perspective
     if body.topic is not None:
         base["topic"] = body.topic
-    base["last_modified"] = now_iso()
-    base.setdefault("created_at", base["last_modified"])
+    now = now_iso()
+    base["last_modified"] = now
+    base.setdefault("created_at", now)
     upsert_row(_projects_index_csv(), PROJECTS_INDEX_HEADERS, base, primary_key="name")
     upsert_row(_project_meta_csv(name), PROJECT_META_HEADERS, base, primary_key="name")
-    return {"project": base}
+
+    # SPEC §六：阶段切换副作用（异常隔离，不阻塞响应）
+    if stage_changed:
+        try:
+            get_stage(old_stage).on_exit(proj_dir, name, now)
+        except Exception as exc:  # noqa: BLE001
+            _log_stage_error(proj_dir, old_stage, "on_exit", exc)
+        try:
+            get_stage(body.stage).on_enter(proj_dir, name, now)
+        except Exception as exc:  # noqa: BLE001
+            _log_stage_error(proj_dir, body.stage, "on_enter", exc)
+
+    current_stage = base.get("stage", "topic")
+    stage_info = get_stage(current_stage).describe()
+    stage_info["all_stages"] = list_stages()
+    return {
+        "project": _decorate_project(base),
+        "stage_info": stage_info,
+        "stage_changed": stage_changed,
+    }
+
+
+def _log_stage_error(proj_dir: Path, stage_name: str, hook: str, exc: BaseException) -> None:
+    """阶段副作用异常：写入 reviewer.md，不抛出到接口外。"""
+    try:
+        reviewer = proj_dir / "memories" / "reviewer.md"
+        reviewer.parent.mkdir(parents=True, exist_ok=True)
+        stamp = now_iso()
+        block = (
+            f"\n\n## {stamp} · 阶段副作用异常\n"
+            f"- 阶段：`{stage_name}`\n"
+            f"- 钩子：`{hook}`\n"
+            f"- 异常类型：`{type(exc).__name__}`\n"
+            f"- 异常信息：{exc}\n"
+        )
+        with reviewer.open("a", encoding="utf-8") as f:
+            f.write(block)
+    except Exception:
+        # 二次失败完全忽略，避免影响主流程
+        pass
 
 
 @router.post("/{name}/rename")

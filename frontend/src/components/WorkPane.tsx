@@ -20,6 +20,8 @@ import { LatexPreviewPanel } from "./panels/LatexPreviewPanel";
 import { LiteratureListPanel } from "./panels/LiteratureListPanel";
 import { KBCardListPanel } from "./panels/KBCardListPanel";
 import { FileWatcherPanel } from "./panels/FileWatcherPanel";
+import StageGuidePanel from "./panels/StageGuidePanel";
+import CitationAggregatePanel from "./panels/CitationAggregatePanel";
 
 export type PaneKind =
   | "ai-chat"
@@ -29,7 +31,9 @@ export type PaneKind =
   | "latex-preview"
   | "lit-list"
   | "kb-list"
-  | "file-watcher";
+  | "file-watcher"
+  | "stage-guide"
+  | "citation-aggregate";
 
 export const PANE_KINDS: { value: PaneKind; label: string }[] = [
   { value: "ai-chat",       label: "AI 对话" },
@@ -40,6 +44,8 @@ export const PANE_KINDS: { value: PaneKind; label: string }[] = [
   { value: "lit-list",      label: "文献卡片列表" },
   { value: "kb-list",       label: "知识库卡片列表" },
   { value: "file-watcher",  label: "监控目录（自动转换）" },
+  { value: "stage-guide",       label: "阶段引导（G）" },
+  { value: "citation-aggregate", label: "引用汇总（G）" },
 ];
 
 interface Props {
@@ -55,12 +61,15 @@ interface Props {
   onOpenSettings: () => void;
   // 通用通知
   notify: (text: string, kind?: "ok" | "warn" | "error") => void;
+  // G 阶段：StageGuidePanel 切换阶段时回调（父组件触发 updateProject）
+  onStageChange?: (stage: string) => void | Promise<void>;
 }
 
 export function WorkPane(props: Props) {
   const {
     side, kind, onKindChange, project,
     mdContent, onMdChange, apiKeysReady, onOpenSettings, notify,
+    onStageChange,
   } = props;
 
   return (
@@ -105,6 +114,18 @@ export function WorkPane(props: Props) {
         )}
         {kind === "kb-list" && <KBCardListPanel notify={notify} />}
         {kind === "file-watcher" && <FileWatcherPanel notify={notify} />}
+        {kind === "stage-guide" && (
+          <StageGuidePanel
+            projectName={project?.name || ""}
+            currentStage={project?.stage || "topic"}
+            onStageChange={async (s) => {
+              if (onStageChange) await onStageChange(s);
+            }}
+          />
+        )}
+        {kind === "citation-aggregate" && (
+          <CitationAggregatePanel projectName={project?.name || ""} />
+        )}
       </div>
     </section>
   );

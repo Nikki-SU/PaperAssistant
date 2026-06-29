@@ -114,6 +114,11 @@ export default function App() {
       setProjects((ps) => [r.project, ...ps]);
       setActiveName(r.project.name);
       setShowCreate(false);
+      // G 阶段：创建即进入 topic，自动应用默认面板
+      if (r.stage_info) {
+        setLeftKind(r.stage_info.default_left_pane as PaneKind);
+        setRightKind(r.stage_info.default_right_pane as PaneKind);
+      }
       if (r.project.is_placeholder_name) {
         notify(`已创建占位项目「${r.project.name}」，选题完成后可重命名`, "ok");
       } else {
@@ -155,9 +160,20 @@ export default function App() {
     try {
       const r = await api.updateProject(active.name, { stage });
       setProjects((ps) => ps.map((p) => (p.name === r.project.name ? r.project : p)));
+      // G 阶段：阶段变更时按 stage_info 自动应用默认面板
+      if (r.stage_changed && r.stage_info) {
+        setLeftKind(r.stage_info.default_left_pane as PaneKind);
+        setRightKind(r.stage_info.default_right_pane as PaneKind);
+        notify(`已切换到「${r.stage_info.label}」阶段，已自动应用默认面板`, "ok");
+      }
     } catch (e) {
       notify(`切换阶段失败: ${String(e)}`, "error");
     }
+  }
+
+  // G 阶段：StageGuidePanel 直接传递的阶段切换回调
+  async function handleStageChangeFromPanel(stage: string) {
+    await switchStage(stage);
   }
 
   // ---- 拖拽分隔条 ----
@@ -224,6 +240,7 @@ export default function App() {
               apiKeysReady={apiKeysReady}
               onOpenSettings={() => setShowSettings(true)}
               notify={notify}
+              onStageChange={handleStageChangeFromPanel}
             />
           </div>
           <div className="splitter" onMouseDown={onDragStart} />
@@ -238,6 +255,7 @@ export default function App() {
               apiKeysReady={apiKeysReady}
               onOpenSettings={() => setShowSettings(true)}
               notify={notify}
+              onStageChange={handleStageChangeFromPanel}
             />
           </div>
         </div>
