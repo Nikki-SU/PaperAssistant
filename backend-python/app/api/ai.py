@@ -2,7 +2,8 @@
 
 端点：
 - POST /api/ai/chat   通用聊天端点，按 role 路由（assistant/auditor/secretary）
-- GET  /api/ai/status 4 个角色的就绪状态（不含 mineru —— mineru 单独有上传端点）
+- POST /api/ai/verify SPEC §4.3 事实核查 5 轮循环
+- GET  /api/ai/status 3 个角色的就绪状态（不含 mineru —— mineru 单独有上传端点）
 
 铁律：失败必须降级，返回结构化错误而非 5xx，方便前端友好提示。
 """
@@ -125,4 +126,63 @@ def chat(body: ChatRequest) -> ChatResponse:
         error_code=result.error_code,
         project=body.project,
         stage=body.stage,
+    )
+
+
+
+# ---------------- SPEC §4.3 事实核查 ----------------
+
+
+class SourceItem(BaseModel):
+    title: str = ""
+    snippet: str = ""
+
+
+class VerifyRequest(BaseModel):
+    content: str = Field(..., min_length=1, description="助手 AI 已生成的待审内容")
+    sources: list[SourceItem] = Field(default_factory=list, description="原文引用片段")
+    project: Optional[str] = None
+    max_rounds: int = Field(5, ge=1, le=5)
+
+
+class VerifyResponse(BaseModel):
+    status: Literal["verified", "failed", "not_configured", "error"]
+    final_content: str = ""
+    rounds: int = 0
+    last_feedback: str = ""
+    log_path: str = ""
+    audit_status: Literal["verified", "suggestion", "user", "error"] = "suggestion"
+
+
+@router.post("/verify", response_model=VerifyResponse)
+def verify(body: VerifyRequest) -> VerifyResponse:
+    """SPEC §4.3：让 auditor 检查 content 是否与 sources 一致。
+
+    - 一致且无新增 → status=verified
+    - 5 轮仍未通过 → status=failed（内容应被业务侧丢弃）
+    - auditor 未配置 → status=not_configured
+    - 中途调用失败 → status=error
+    """
+    orch = get_orchestrator()
+    orch.refresh()
+    result = orch.verify_with_auditor(
+        body.content,
+        [s.model_dump() for s in body.sources],
+        project=body.project,
+        max_rounds=body.max_rounds,
+    )
+    # 把 status 映射到前端用的 audit_status，省得前端再翻译一次
+    audit_status_map = {
+        "verified": "verified",
+        "failed": "error",
+        "not_configured": "suggestion",
+        "error": "error",
+    }
+    return VerifyResponse(
+        status=result.status,
+        final_content=result.final_content,
+        rounds=result.rounds,
+        last_feedback=result.last_feedback,
+        log_path=result.log_path,
+        audit_status=audit_status_map.get(result.status, "suggestion"),  # type: ignore
     )

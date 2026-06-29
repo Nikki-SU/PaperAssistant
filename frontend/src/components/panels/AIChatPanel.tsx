@@ -20,6 +20,11 @@ interface Msg {
   audit: Audit;
   citations?: { doi: string; checked: boolean }[];
   errorCode?: string;
+  // —— SPEC §4.3 事实核查相关 ——
+  verifyState?: "idle" | "running" | "verified" | "failed" | "not_configured" | "error";
+  verifyFeedback?: string;   // 失败时的兜底引导
+  verifyRounds?: number;     // 跑了几轮
+  verifyDropped?: boolean;   // 5 轮 fail → 后端硬丢弃；前端禁止"采纳"
 }
 
 interface Props {
@@ -157,6 +162,59 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
     notify(`已切换文献勾选 ${doi}`, "ok");
   }
 
+  // ---- SPEC §4.3：对某条助手消息发起事实核查 ----
+  async function verifyMsg(msgId: string) {
+    const m = messages.find((x) => x.id === msgId);
+    if (!m || m.role !== "assistant" || !m.text.trim()) return;
+    setMessages((arr) => arr.map((x) =>
+      x.id === msgId ? { ...x, verifyState: "running" } : x
+    ));
+    try {
+      const resp = await api.aiVerify({
+        content: m.text,
+        // MVP：先把当前消息的 DOI 列表作为来源 hint；正式版应该从文献库取片段
+        sources: (m.citations ?? []).filter((c) => c.checked).map((c) => ({
+          title: c.doi,
+          snippet: c.doi,
+        })),
+        project: project?.name,
+        max_rounds: 5,
+      });
+      setMessages((arr) => arr.map((x) => {
+        if (x.id !== msgId) return x;
+        const next: Msg = { ...x };
+        next.verifyState = resp.status;
+        next.verifyFeedback = resp.last_feedback;
+        next.verifyRounds = resp.rounds;
+        next.verifyDropped = resp.status === "failed";
+        if (resp.status === "verified") {
+          next.audit = "verified";
+          // verified 时 final_content 是审阅过的最终版（可能被改写过）
+          if (resp.final_content && resp.final_content !== x.text) {
+            next.text = resp.final_content;
+          }
+        } else if (resp.status === "failed") {
+          next.audit = "error";  // 红色徽章
+        }
+        return next;
+      }));
+      if (resp.status === "failed") {
+        notify(`事实核查 5 轮未通过，内容已丢弃（不会入库）`, "error");
+      } else if (resp.status === "verified") {
+        notify(`事实核查通过（${resp.rounds} 轮）`, "ok");
+      } else if (resp.status === "not_configured") {
+        notify(`审阅 AI 未配置，请到设置面板填写`, "warn");
+      } else {
+        notify(`事实核查出错：${resp.last_feedback}`, "error");
+      }
+    } catch (e) {
+      setMessages((arr) => arr.map((x) =>
+        x.id === msgId ? { ...x, verifyState: "error", verifyFeedback: String(e) } : x
+      ));
+      notify(`事实核查请求失败：${e}`, "error");
+    }
+  }
+
   return (
     <div className="ai-chat">
       <div className="ai-chat-status">
@@ -195,6 +253,45 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
             {m.errorCode === "not_configured" && (
               <div className="ai-msg-cta">
                 <button className="link-btn" onClick={onOpenSettings}>去设置 →</button>
+              </div>
+            )}
+            {m.role === "assistant" && !m.errorCode && (
+              <div className="ai-msg-verify">
+                {(!m.verifyState || m.verifyState === "idle") && (
+                  <button
+                    className="link-btn"
+                    onClick={() => void verifyMsg(m.id)}
+                    title="让审阅 AI 检查本条内容是否与原文一致（最多 5 轮）"
+                  >🔍 事实核查</button>
+                )}
+                {m.verifyState === "running" && (
+                  <span className="muted-small">审阅中…（最多 5 轮）</span>
+                )}
+                {m.verifyState === "verified" && (
+                  <span className="verify-badge verify-pass">
+                    ✓ 已通过事实核查（{m.verifyRounds} 轮）
+                  </span>
+                )}
+                {m.verifyState === "failed" && (
+                  <div className="verify-failed-box">
+                    <div className="verify-failed-title">
+                      ✗ 事实核查 5 轮未通过 · 内容已自动丢弃（不会入库）
+                    </div>
+                    {m.verifyFeedback && (
+                      <pre className="verify-failed-feedback">{m.verifyFeedback}</pre>
+                    )}
+                  </div>
+                )}
+                {m.verifyState === "not_configured" && (
+                  <span className="verify-badge verify-warn">
+                    审阅 AI 未配置 · <button className="link-btn" onClick={onOpenSettings}>去设置</button>
+                  </span>
+                )}
+                {m.verifyState === "error" && (
+                  <span className="verify-badge verify-warn">
+                    审阅出错：{m.verifyFeedback?.slice(0, 80)}
+                  </span>
+                )}
               </div>
             )}
             {m.citations && m.citations.length > 0 && (

@@ -113,6 +113,27 @@ export interface AIRoleStatus {
   model: string;
 }
 
+export interface VerifySource {
+  title?: string;
+  snippet: string;
+}
+
+export interface VerifyRequest {
+  content: string;
+  sources: VerifySource[];
+  project?: string;
+  max_rounds?: number;
+}
+
+export interface VerifyResponse {
+  status: "verified" | "failed" | "not_configured" | "error";
+  final_content: string;  // failed 时后端会清空（硬丢弃，禁止入库）
+  rounds: number;
+  last_feedback: string;
+  log_path: string;
+  audit_status: "verified" | "suggestion" | "user" | "error";
+}
+
 async function _json<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   let resp: Response;
   try {
@@ -326,5 +347,17 @@ export const api = {
   },
   aiStatus() {
     return _json<{ items: AIRoleStatus[] }>(`${BASE}/api/ai/status`);
+  },
+  aiVerify(input: VerifyRequest) {
+    return _json<VerifyResponse>(`${BASE}/api/ai/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content: input.content,
+        sources: input.sources,
+        project: input.project ?? null,
+        max_rounds: input.max_rounds ?? 5,
+      }),
+    });
   },
 };
