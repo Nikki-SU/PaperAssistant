@@ -390,7 +390,7 @@ export const api = {
     return _json<{
       card: LiteratureCard;
       created: boolean;
-      mineru: { success: boolean; message: string };
+      mineru: { success: boolean; message: string; page_count?: number; truncated?: boolean };
     }>(u.toString(), { method: "POST", body: fd });
   },
 
@@ -490,9 +490,11 @@ export const api = {
       { method: "DELETE" }
     );
   },
-  listKnowledgeCards(subject?: string) {
+  listKnowledgeCards(subject?: string, q?: string, limit?: number) {
     const u = new URL(`${BASE}/api/knowledge`);
     if (subject) u.searchParams.set("subject", subject);
+    if (q) u.searchParams.set("q", q);
+    if (limit !== undefined) u.searchParams.set("limit", String(limit));
     return _json<{ cards: KnowledgeCard[]; total: number }>(u.toString());
   },
   upsertKnowledgeCard(card: {
@@ -556,6 +558,26 @@ export const api = {
     return _json<{ ok: boolean; project: string }>(
       `${BASE}/api/temp_knowledge/${encodeURIComponent(project)}`,
       { method: "DELETE" }
+    );
+  },
+
+  // ---------- draft 正文读写（SPEC §六 / §7.3） ----------
+  async getDraft(project: string): Promise<string> {
+    const r = await fetch(`${BASE}/api/project/${encodeURIComponent(project)}/draft`);
+    if (!r.ok) {
+      const txt = await r.text();
+      throw new Error(`getDraft ${r.status}: ${txt}`);
+    }
+    return await r.text();
+  },
+  saveDraft(project: string, content: string) {
+    return _json<{ name: string; path: string; bytes: number; saved_at: string }>(
+      `${BASE}/api/project/${encodeURIComponent(project)}/draft`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content }),
+      }
     );
   },
 

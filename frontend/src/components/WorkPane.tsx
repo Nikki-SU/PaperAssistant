@@ -9,8 +9,7 @@
  * · LaTeX 预览
  * · 文献卡片列表
  * · 知识库卡片列表
- *
- * 用 select 切换；切换时回调外部，让父组件保存状态。
+ * · 监控目录 file_watcher（F6 新增，配合 SPEC §九）
  */
 import type { Project } from "../api/client";
 import { AIChatPanel } from "./panels/AIChatPanel";
@@ -20,6 +19,7 @@ import { MarkdownEditorPanel } from "./panels/MarkdownEditorPanel";
 import { LatexPreviewPanel } from "./panels/LatexPreviewPanel";
 import { LiteratureListPanel } from "./panels/LiteratureListPanel";
 import { KBCardListPanel } from "./panels/KBCardListPanel";
+import { FileWatcherPanel } from "./panels/FileWatcherPanel";
 
 export type PaneKind =
   | "ai-chat"
@@ -28,7 +28,8 @@ export type PaneKind =
   | "md-editor"
   | "latex-preview"
   | "lit-list"
-  | "kb-list";
+  | "kb-list"
+  | "file-watcher";
 
 export const PANE_KINDS: { value: PaneKind; label: string }[] = [
   { value: "ai-chat",       label: "AI 对话" },
@@ -38,6 +39,7 @@ export const PANE_KINDS: { value: PaneKind; label: string }[] = [
   { value: "latex-preview", label: "LaTeX 预览" },
   { value: "lit-list",      label: "文献卡片列表" },
   { value: "kb-list",       label: "知识库卡片列表" },
+  { value: "file-watcher",  label: "监控目录（自动转换）" },
 ];
 
 interface Props {
@@ -96,12 +98,13 @@ export function WorkPane(props: Props) {
           />
         )}
         {kind === "latex-preview" && (
-          <LatexPreviewPanel mdSource={mdContent} />
+          <LatexPreviewPanel mdSource={mdContent} project={project} notify={notify} />
         )}
         {kind === "lit-list" && (
           <LiteratureListPanel project={project} notify={notify} />
         )}
         {kind === "kb-list" && <KBCardListPanel notify={notify} />}
+        {kind === "file-watcher" && <FileWatcherPanel notify={notify} />}
       </div>
     </section>
   );

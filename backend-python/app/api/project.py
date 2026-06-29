@@ -26,6 +26,7 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 from ..config import get_settings
@@ -267,4 +268,50 @@ def delete_project(name: str) -> dict:
         "deleted_from_index": True,
         "files_kept_at": str(proj_dir),
         "note": "为保护用户数据，项目目录未物理删除。如需彻底清理请手动移除。",
+    }
+
+
+# ==================== SPEC §六 / §7.3 论文正文 draft.md 读写 ====================
+
+class DraftSave(BaseModel):
+    content: str
+
+
+@router.get("/{name}/draft", response_class=PlainTextResponse)
+def get_draft(name: str) -> str:
+    """读取项目正文 paper/draft.md。不存在则返回空字符串（避免前端报 404 影响首次打开）。"""
+    _validate_name(name)
+    proj_dir = _project_dir(name)
+    if not proj_dir.exists():
+        raise HTTPException(status_code=404, detail=f"项目不存在：{name}")
+    draft = proj_dir / "paper" / "draft.md"
+    if not draft.exists():
+        return ""
+    return draft.read_text(encoding="utf-8")
+
+
+@router.put("/{name}/draft")
+def save_draft(name: str, body: DraftSave) -> dict:
+    """写入项目正文 paper/draft.md（覆盖）。"""
+    _validate_name(name)
+    proj_dir = _project_dir(name)
+    if not proj_dir.exists():
+        raise HTTPException(status_code=404, detail=f"项目不存在：{name}")
+    paper_dir = proj_dir / "paper"
+    paper_dir.mkdir(parents=True, exist_ok=True)
+    draft = paper_dir / "draft.md"
+    write_text(draft, body.content)
+    # 同步 last_modified 到索引
+    rows = filter_rows(_projects_index_csv(), where={"name": name})
+    if rows:
+        row = rows[-1]
+        row["last_modified"] = now_iso()
+        upsert_row(_projects_index_csv(), PROJECTS_INDEX_HEADERS, row, primary_key="name")
+        ensure_csv(_project_meta_csv(name), PROJECT_META_HEADERS)
+        upsert_row(_project_meta_csv(name), PROJECT_META_HEADERS, row, primary_key="name")
+    return {
+        "name": name,
+        "path": str(draft),
+        "bytes": len(body.content.encode("utf-8")),
+        "saved_at": now_iso(),
     }
