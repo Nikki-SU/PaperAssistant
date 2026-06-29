@@ -1,4 +1,8 @@
-"""阶段五：排版（SPEC §7.5）。默认面板 左 md-editor / 右 latex-preview。"""
+"""阶段五：排版（SPEC §7.5）。默认面板 左 md-editor / 右 latex-preview。
+
+H 阶段更新：种子 template.tex 显式带 ``{{title}}`` ``{{body}}`` 占位符，
+配合 typesetting API 的 render_tex 端点。已存在 template.tex 时不覆盖。
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -51,14 +55,15 @@ def on_enter(proj_dir: Path, proj_name: str, now: str) -> None:
             tpl,
             "% PaperAssistant LaTeX 模板骨架（待 AI 按目标期刊格式补全）\n"
             "% 创建时间：" + now + "\n"
+            "% 占位符：{{title}} 与 {{body}} 会在 /render_tex 时被替换。\n"
             "\\documentclass[11pt]{article}\n"
             "\\usepackage[utf8]{inputenc}\n"
             "\\usepackage{ctex}\n"
             "\\usepackage{amsmath, amssymb, graphicx, hyperref}\n"
-            "\\title{" + proj_name + "}\n"
+            "\\title{{{title}}}\n"
             "\\begin{document}\n"
             "\\maketitle\n"
-            "% \\input{manuscript.tex}\n"
+            "{{body}}\n"
             "\\end{document}\n",
         )
 
