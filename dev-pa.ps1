@@ -1,4 +1,4 @@
-# PaperAssistant 一键启动（Windows / PowerShell）
+﻿# PaperAssistant 一键启动（Windows / PowerShell）
 # - 启动 backend (FastAPI @ 127.0.0.1:8181)
 # - 启动 frontend (Vite @ 127.0.0.1:1421)
 # - 可选：同时启动 debug-assistant server（需要 G:\debug-assistant 已 clone）
