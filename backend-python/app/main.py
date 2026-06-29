@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api import (
     ai as ai_api,
     citation,
+    file_watcher as file_watcher_api,
     health,
     knowledge as knowledge_api,
     literature,
@@ -24,6 +25,7 @@ from .api import (
 )
 from .config import get_settings
 from .lib import debug_assistant as da
+from .services import start_watcher, stop_watcher
 
 logger = logging.getLogger("paperassistant")
 
@@ -62,7 +64,7 @@ def create_app() -> FastAPI:
 
     app = FastAPI(
         title="PaperAssistant Backend",
-        version="0.3.0",
+        version="0.4.0",
         description="本地优先的学术写作辅助后端（SPEC v0.1）",
     )
     app.add_middleware(
@@ -83,11 +85,25 @@ def create_app() -> FastAPI:
     app.include_router(ai_api.router)
     app.include_router(knowledge_api.router)
     app.include_router(temp_knowledge_api.router)
+    app.include_router(file_watcher_api.router)
 
     @app.on_event("startup")
     def _on_startup() -> None:
         _init_debug_assistant()
         logger.info("PaperAssistant data_root = %s", settings.data_root)
+        # SPEC §九：启动文件监控
+        try:
+            start_watcher()
+            logger.info("file_watcher 已启动：%s", settings.monitor_dir)
+        except Exception:  # noqa: BLE001
+            logger.exception("file_watcher 启动失败（不阻塞主流程）")
+
+    @app.on_event("shutdown")
+    def _on_shutdown() -> None:
+        try:
+            stop_watcher()
+        except Exception:  # noqa: BLE001
+            logger.exception("file_watcher 停止失败")
 
     return app
 

@@ -211,13 +211,21 @@ export interface TextbookInfo {
   [k: string]: string | number | boolean | undefined;
 }
 
-// 临时知识
-export interface TempKnowledgeItem {
-  ts: string;
+// 临时知识（追加入参）
+export interface TempKnowledgeAppendInput {
+  title: string;
   content: string;
-  source: string;
+  source?: string;
+  section?: string;
+  task_type?: string;
   audited: boolean;
-  feedback: string;
+}
+// 临时知识文件包含 Markdown 全文，items 概念已废弃
+export interface TempKnowledgeRead {
+  project: string;
+  path: string;
+  content: string;
+  size_bytes: number;
 }
 
 async function _json<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
@@ -524,15 +532,12 @@ export const api = {
 
   // ---------- temp_knowledge (SPEC §8.4) ----------
   getTempKnowledge(project: string) {
-    return _json<{ items: TempKnowledgeItem[] }>(
+    return _json<TempKnowledgeRead>(
       `${BASE}/api/temp_knowledge/${encodeURIComponent(project)}`
     );
   },
-  appendTempKnowledge(
-    project: string,
-    input: { content: string; source?: string; audited: boolean; feedback?: string }
-  ) {
-    return _json<{ ok: boolean; item: TempKnowledgeItem }>(
+  appendTempKnowledge(project: string, input: TempKnowledgeAppendInput) {
+    return _json<{ ok: boolean; project: string; path: string; appended: boolean }>(
       `${BASE}/api/temp_knowledge/${encodeURIComponent(project)}`,
       {
         method: "POST",
@@ -542,15 +547,49 @@ export const api = {
     );
   },
   clearTempKnowledge(project: string) {
-    return _json<{ ok: boolean; backup: string }>(
+    return _json<{ ok: boolean; project: string; backup_path: string }>(
       `${BASE}/api/temp_knowledge/${encodeURIComponent(project)}/clear`,
       { method: "POST" }
     );
   },
   deleteTempKnowledge(project: string) {
-    return _json<{ ok: boolean }>(
+    return _json<{ ok: boolean; project: string }>(
       `${BASE}/api/temp_knowledge/${encodeURIComponent(project)}`,
       { method: "DELETE" }
     );
+  },
+
+  // ---------- file_watcher (SPEC §九) ----------
+  watcherStatus() {
+    return _json<{
+      running: boolean;
+      monitor_dir: string;
+      output_root: string;
+      processed_count: number;
+      mineru_configured: boolean;
+    }>(`${BASE}/api/file_watcher/status`);
+  },
+  watcherStart() {
+    return _json<{ ok: boolean; running: boolean }>(
+      `${BASE}/api/file_watcher/start`,
+      { method: "POST" }
+    );
+  },
+  watcherStop() {
+    return _json<{ ok: boolean; running: boolean }>(
+      `${BASE}/api/file_watcher/stop`,
+      { method: "POST" }
+    );
+  },
+  watcherScan() {
+    return _json<{ ok: boolean; processed_this_round: number }>(
+      `${BASE}/api/file_watcher/scan`,
+      { method: "POST" }
+    );
+  },
+  watcherProcessed(limit?: number) {
+    const u = new URL(`${BASE}/api/file_watcher/processed`);
+    if (limit !== undefined) u.searchParams.set("limit", String(limit));
+    return _json<{ items: Record<string, string>[]; total: number }>(u.toString());
   },
 };

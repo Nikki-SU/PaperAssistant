@@ -27,6 +27,7 @@ from typing import Optional
 
 from ..config import get_settings
 from ..lib import debug_assistant as da
+from .pdf_splitter import MAX_PAGES_PER_CHUNK, merge_markdowns, split_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +97,16 @@ class MineruClient:
                 message="MinerU 未配置 API Key，已降级为占位 Markdown。",
             )
 
+        # SPEC §九：大文件自动切分（>200 页时按 200 页一段）
+        split_dir = output_md.parent / "__mineru_chunks__"
+        split_result = split_pdf(pdf_path, split_dir, max_pages=MAX_PAGES_PER_CHUNK)
+        if split_result.success and split_result.used_split:
+            logger.info(
+                "PDF 触发切分（%d 页 → %d 段）：%s",
+                split_result.total_pages, len(split_result.chunks), pdf_path.name,
+            )
+            return self._parse_chunks(pdf_path, output_md, split_result, size)
+
         try:
             return self._call_real(pdf_path, output_md, size)
         except Exception as e:  # noqa: BLE001
@@ -114,6 +125,86 @@ class MineruClient:
             return MineruResult(
                 success=False, markdown_path=output_md, message=f"{type(e).__name__}: {e}",
             )
+
+    # ---------------- 大文件切分流程 ----------------
+
+    def _parse_chunks(
+        self,
+        original_pdf: Path,
+        output_md: Path,
+        split_result,  # SplitResult
+        original_size: int,
+    ) -> MineruResult:
+        """对切分后的每个 chunk 调一次 MinerU，按顺序合并 Markdown。
+
+        任一段失败：写完整占位 + 已成功段的 Markdown，标记 success=False。
+        """
+        chunk_mds = []
+        any_failed = False
+        last_msg = ""
+        total_pages = split_result.total_pages
+        for ch in split_result.chunks:
+            chunk_out = output_md.parent / f".chunk__{ch.index:02d}.md"
+            try:
+                sub_size = ch.path.stat().st_size
+                sub_result = self._call_real(ch.path, chunk_out, sub_size)
+                if sub_result.success and chunk_out.exists():
+                    chunk_mds.append(chunk_out.read_text(encoding="utf-8"))
+                else:
+                    any_failed = True
+                    last_msg = sub_result.message or "分段转换失败"
+                    chunk_mds.append(
+                        f"\n<!-- Part {ch.index}/{ch.total} 失败：{last_msg} -->\n"
+                    )
+                    logger.warning("分段 %d/%d 失败：%s", ch.index, ch.total, last_msg)
+            except Exception as e:  # noqa: BLE001
+                any_failed = True
+                last_msg = f"{type(e).__name__}: {e}"
+                chunk_mds.append(
+                    f"\n<!-- Part {ch.index}/{ch.total} 异常：{last_msg} -->\n"
+                )
+                logger.exception("分段 %d/%d 异常", ch.index, ch.total)
+                da.report(
+                    error=e, severity="error", stage="literature-upload",
+                    user_action=f"MinerU parse chunk {ch.index}/{ch.total}",
+                    context={"pdf": ch.path.name},
+                )
+
+        merged = merge_markdowns(chunk_mds, split_result.chunks)
+        header = (
+            f"# {original_pdf.stem}\n\n"
+            f"> ⚠️ 该 PDF 共 {total_pages} 页（超过 200 页），"
+            f"已自动切分为 {len(split_result.chunks)} 段处理后合并。\n\n"
+        )
+        output_md.write_text(header + merged, encoding="utf-8")
+
+        # 清理 chunk 临时文件
+        try:
+            for ch in split_result.chunks:
+                if ch.path.parent.name == "__mineru_chunks__" and ch.path.exists():
+                    ch.path.unlink()
+            split_dir = output_md.parent / "__mineru_chunks__"
+            if split_dir.exists():
+                for f in split_dir.iterdir():
+                    if f.name.startswith(".chunk__"):
+                        try:
+                            f.unlink()
+                        except OSError:
+                            pass
+                try:
+                    split_dir.rmdir()
+                except OSError:
+                    pass
+        except Exception:  # noqa: BLE001
+            pass
+
+        return MineruResult(
+            success=not any_failed,
+            markdown_path=output_md,
+            page_count=total_pages,
+            truncated=False,
+            message=("切分合并完成" if not any_failed else f"部分分段失败：{last_msg}"),
+        )
 
     # ---------------- 真实 HTTP 流程 ----------------
 
