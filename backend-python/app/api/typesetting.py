@@ -166,7 +166,11 @@ def compile_pdf(project: str) -> dict:
             "project": project,
             "compiled": False,
             "reason": "timeout",
-            "hint": "Tectonic 编译超过 180 秒，请检查文档体量或依赖包下载情况。",
+            "hint": (
+                "Tectonic 编译超过 180 秒，请检查文档体量或依赖包下载情况。"
+                "首次编译需联网下载 LaTeX 宏包（约 30-50 MB）到本地缓存，"
+                "网络较慢时可能超时；首次成功后宏包会被缓存，之后可离线编译。"
+            ),
         }
     except FileNotFoundError:
         # 解析时拿到的路径在执行瞬间失效
@@ -179,11 +183,29 @@ def compile_pdf(project: str) -> dict:
 
     pdf = paper_dir / (tex.stem + ".pdf")
     if proc.returncode != 0 or not pdf.exists():
+        # 启发式判断是否是网络/宏包下载相关错误
+        combined = (proc.stderr or "") + "\n" + (proc.stdout or "")
+        lc = combined.lower()
+        network_keywords = ("ctan", "download", "network", "timed out", "timeout", "connection", "resolve", "dns")
+        looks_like_network = any(k in lc for k in network_keywords)
+        if looks_like_network:
+            hint = (
+                "Tectonic 编译失败，错误信息中包含网络相关关键词。"
+                "首次编译需联网从 CTAN 下载 LaTeX 宏包（约 30-50 MB）到本地缓存，"
+                "请确认网络畅通（或代理已设置），再点一次「一键编译 PDF」。"
+                "首次成功后宏包会被缓存，之后可离线编译。"
+            )
+        else:
+            hint = (
+                "Tectonic 返回非零退出码。请查看下方 stderr_tail 定位 LaTeX 语法/缺包错误；"
+                "若提示缺少某个 LaTeX 包，Tectonic 应在联网时自动下载——首次编译需联网下载约 30-50 MB 宏包。"
+            )
         return {
             "project": project,
             "compiled": False,
             "reason": "tectonic_failed",
             "returncode": proc.returncode,
+            "hint": hint,
             "stderr_tail": (proc.stderr or "")[-2000:],
             "stdout_tail": (proc.stdout or "")[-1000:],
         }

@@ -123,6 +123,17 @@ cd PaperAssistant
   - 前端：`frontend/src/lib/debugAssistant.ts`，内联精简 SDK；安装全局错误捕获，HTTP 失败 / Promise reject 自动上报。
 - 不强依赖：debug-assistant 没起也能完整跑 PaperAssistant。
 
+## 首次编译 PDF 说明
+
+PaperAssistant 内嵌的 **Tectonic** 是按需下载 LaTeX 宏包的引擎，行为如下：
+
+- **首次编译会联网**：第一次点击「一键编译 PDF」时，Tectonic 会从 CTAN 镜像下载所需 LaTeX 宏包到本地缓存（默认 `%LOCALAPPDATA%\TectonicProject\Tectonic\`），约 **30–50 MB**。
+- **之后离线可用**：宏包进入本地缓存后，第二次起完全离线也能编译。
+- **如果首次失败**：前端会显示降级原因（`tectonic_failed` / `timeout`）和 stderr 尾部。最常见的原因是网络不通 CTAN 或代理未设置——确认网络畅通后再点一次即可。
+- **长期内网环境**：如设备始终无法访问 CTAN，可联系开发者切到离线 bundle 模式（把约 200 MB 的完整 LaTeX 包预先内嵌进安装包，不再依赖联网）。
+
+> 普通用户**不需要**单独下载 Tectonic——`tectonic.exe` 已通过 `frontend/src-tauri/resources/tectonic/` 资源机制内嵌进 `.msi` / `.exe` 安装包。
+
 ## License
 
 AGPL-3.0

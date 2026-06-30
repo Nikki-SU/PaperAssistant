@@ -129,7 +129,10 @@ export function LatexPreviewPanel({
       } else if (r.reason === "timeout") {
         notify("Tectonic 编译超时（180s），已中止", "warn");
       } else if (r.reason === "tectonic_failed") {
-        notify(`Tectonic 编译失败（returncode=${r.returncode}）`, "error");
+        notify(
+          `Tectonic 编译失败（returncode=${r.returncode}），详见下方提示与错误尾部`,
+          "error",
+        );
       } else {
         notify(`PDF 编译未完成：${r.reason ?? "unknown"}`, "warn");
       }

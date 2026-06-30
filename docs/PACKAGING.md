@@ -143,17 +143,27 @@ Rust 启动器抛 `failed to spawn sidecar paperassistant-backend`：
 - 调试运行时（步骤 6）应能看到 `PAPERASSISTANT_TECTONIC_BIN=...` 注入
 - 也可手动在系统环境变量里设 `TECTONIC_BIN`
 
-### 7.3 "tauri command not found"
+### 7.3 "compiled: false, reason: tectonic_failed" 且 stderr 提到网络
+
+调 `/api/typesetting/{project}/compile_pdf` 返回 `tectonic_failed`，且 `stderr_tail` 包含 `ctan` / `download` / `network` / `timeout` / `connection` / `resolve` / `dns` 等关键词：
+- **首次编译需联网**：Tectonic 第一次会从 CTAN 镜像下载 LaTeX 宏包（约 30–50 MB）到本地缓存
+- 确认网络畅通、代理已正确设置（如适用），再点一次「一键编译 PDF」
+- 一旦首次成功，宏包进入 `%LOCALAPPDATA%\TectonicProject\Tectonic\` 缓存，之后完全离线可用
+- 后端会在 `hint` 字段自动给出对应提示，前端 LatexPreviewPanel 第三段展示块会显示
+
+> 长期内网环境用户：可考虑改造为「离线 bundle 模式」，把完整 LaTeX 包（~200 MB）预先内嵌进安装包，参考 Tectonic 文档的 `--bundle` 参数。
+
+### 7.4 "tauri command not found"
 
 `cargo tauri build` 失败：
 - `cargo install tauri-cli --version "^2.0.0"`
 - 或局部 `npm i -D @tauri-apps/cli@^2`，然后 `npx tauri build`
 
-### 7.4 PyInstaller 在 Win10 报 "import error: pydantic_core"
+### 7.5 PyInstaller 在 Win10 报 "import error: pydantic_core"
 
 `pip install --upgrade pyinstaller pydantic pydantic-core`，spec 已开 `collect_all`，正常不应出现。
 
-### 7.5 安装后启动闪退
+### 7.6 安装后启动闪退
 
 99% 是 sidecar 启动异常，端口未占用、未连接：
 - 用步骤 6 的命令行模式启动，看 `[backend-err]` 完整 traceback
