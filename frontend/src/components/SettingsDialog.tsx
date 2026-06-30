@@ -47,17 +47,17 @@ const ROLE_META: Record<string, RoleMeta> = {
     keyUrl: "https://platform.deepseek.com/api_keys",
     keyUrlLabel: "去 platform.deepseek.com 申请 API Key",
     hint: "推荐 DeepSeek：注册账号 → API Keys → Create new key。也可填其他 OpenAI 兼容服务的 Key。",
-    modelPlaceholder: "如 deepseek-chat / deepseek-reasoner",
+    modelPlaceholder: "如 deepseek-v4-flash / deepseek-v4-pro",
     endpointPlaceholder: "https://api.deepseek.com/v1",
   },
   auditor: {
     label: "审阅 AI（事实核查）",
-    desc: "对助手生成内容做事实核查（SPEC §4.3）；建议用更强或更严谨的模型。",
-    keyUrl: "https://platform.deepseek.com/api_keys",
-    keyUrlLabel: "去 platform.deepseek.com 申请 API Key",
-    hint: "可以和助手共用 Key、用不同 model；也可以接独立账号防止额度互相抢。",
-    modelPlaceholder: "如 deepseek-reasoner（更严谨）",
-    endpointPlaceholder: "https://api.deepseek.com/v1",
+    desc: "对助手生成内容做事实核查（SPEC §4.3）；SPEC §4.5 硬约束：必须与助手位用独立厂商。",
+    keyUrl: "https://cloud.siliconflow.cn/account/ak",
+    keyUrlLabel: "去 siliconflow.cn 申请 API Key",
+    hint: "⚠️ 必须独立于助手位，避免幻觉自审循环。推荐硅基流动的 Qwen / GLM / Kimi 系列。⚠️ 不要在硅基流动上再选 DeepSeek-V4 系——底座与助手位相同等于没换。",
+    modelPlaceholder: "如 Qwen/Qwen2.5-72B-Instruct 或 zai-org/GLM-4.5",
+    endpointPlaceholder: "https://api.siliconflow.cn/v1",
   },
   secretary: {
     label: "秘书 AI（错别字/语法）",
@@ -65,7 +65,7 @@ const ROLE_META: Record<string, RoleMeta> = {
     keyUrl: "https://platform.deepseek.com/api_keys",
     keyUrlLabel: "去 platform.deepseek.com 申请 API Key",
     hint: "可选。不填则修订环节复用助手 Key/Model。",
-    modelPlaceholder: "如 deepseek-chat（轻量任务）",
+    modelPlaceholder: "如 deepseek-v4-flash（轻量任务）",
     endpointPlaceholder: "https://api.deepseek.com/v1",
   },
 };
@@ -120,6 +120,27 @@ export function SettingsDialog({ open, onClose, onSaved, notify }: Props) {
   }
 
   async function onSaveRole(role: ApiRoleConfig, newKey: string | null, draft: Partial<ApiRoleConfig>) {
+    // SPEC §4.5：审阅位必须与助手位独立。保存前做一次防呆校验。
+    if (role.role === "auditor") {
+      const assistantCfg = (snap?.api_roles ?? []).find((r) => r.role === "assistant");
+      const auditorEndpoint = (draft.endpoint ?? role.endpoint ?? "").trim().toLowerCase().replace(/\/+$/, "");
+      const auditorModel = (draft.model ?? role.model ?? "").trim().toLowerCase();
+      const assistantEndpoint = (assistantCfg?.endpoint ?? "").trim().toLowerCase().replace(/\/+$/, "");
+      const assistantModel = (assistantCfg?.model ?? "").trim().toLowerCase();
+      if (
+        auditorEndpoint &&
+        auditorEndpoint === assistantEndpoint &&
+        auditorModel &&
+        auditorModel === assistantModel
+      ) {
+        const ok = confirm(
+          "⚠️ 检测到审阅位与助手位的 Endpoint 和 Model 完全一致。\n\n" +
+          "SPEC §4.5 要求审阅 AI 与助手 AI 用独立厂商/独立模型；现在的配置会让模型自己审自己，事实核查形同虚设。\n\n" +
+          "确定要保存吗？（不推荐继续）"
+        );
+        if (!ok) return;
+      }
+    }
     setBusy(true);
     try {
       await api.saveApiConfig({
