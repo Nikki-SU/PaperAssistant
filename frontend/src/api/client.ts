@@ -336,6 +336,15 @@ async function _text(input: RequestInfo, init?: RequestInit): Promise<string> {
   return await resp.text();
 }
 
+
+// ---------- search sources (SPEC §六：搜索网站) ----------
+export interface SearchSource {
+  id: string;
+  name: string;
+  url_template: string;
+  order: number;
+}
+
 export const api = {
   // ---------- health ----------
   health() {
@@ -801,6 +810,44 @@ export const api = {
     return _json<AggregateResult>(
       `${BASE}/api/project/${encodeURIComponent(project)}/selections/aggregate`,
       { method: "POST" }
+    );
+  },
+
+  // ---------- search sources (SPEC §六) ----------
+  listSearchSources() {
+    return _json<{ items: SearchSource[] }>(`${BASE}/api/search-sources`);
+  },
+  createSearchSource(input: { name: string; url_template?: string }) {
+    return _json<{ ok: boolean; item: SearchSource }>(`${BASE}/api/search-sources`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    });
+  },
+  updateSearchSource(id: string, input: { name?: string; url_template?: string }) {
+    return _json<{ ok: boolean; item: SearchSource }>(
+      `${BASE}/api/search-sources/${encodeURIComponent(id)}`,
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(input),
+      }
+    );
+  },
+  deleteSearchSource(id: string) {
+    return _json<{ ok: boolean; deleted_id: string; remaining: number }>(
+      `${BASE}/api/search-sources/${encodeURIComponent(id)}`,
+      { method: "DELETE" }
+    );
+  },
+  reorderSearchSources(ids: string[]) {
+    return _json<{ ok: boolean; items: SearchSource[] }>(
+      `${BASE}/api/search-sources/reorder`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      }
     );
   },
 };

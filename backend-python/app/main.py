@@ -19,6 +19,7 @@ from .api import (
     knowledge as knowledge_api,
     literature,
     project,
+    search_sources as search_sources_api,
     selections as selections_api,
     settings as settings_api,
     stages_auto as stages_auto_api,
@@ -88,6 +89,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_api.router)
     app.include_router(temp_knowledge_api.router)
     app.include_router(file_watcher_api.router)
+    app.include_router(search_sources_api.router)
     app.include_router(selections_api.router)
     app.include_router(stages_auto_api.router)
 
