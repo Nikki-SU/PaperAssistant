@@ -6,11 +6,16 @@
  *  · 调 listKnowledgeCards({subject?, q?, limit})
  *  · 结果列表显示 title / source_book / summary / audited 徽章
  *  · 点击结果 → 展示完整 Markdown
- *  · 同时支持文献来源切换占位（B 计划再接 listLiterature 联合检索）
+ *
+ * commit β 新增：
+ *  · 详情抽屉里如果 source_book 存在 → 「查看教材原文」按钮
+ *    GET /api/knowledge/textbooks/{subject}/{name}
  */
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api/client";
 import type { KnowledgeCard, SubjectInfo, Project } from "../../api/client";
+
+type DetailView = "card" | "textbook";
 
 export function KBSearchPanel({
   project,
@@ -27,6 +32,9 @@ export function KBSearchPanel({
   const [busy, setBusy] = useState(false);
   const [openCard, setOpenCard] = useState<KnowledgeCard | null>(null);
   const [openMd, setOpenMd] = useState<string>("");
+  const [view, setView] = useState<DetailView>("card");
+  const [tbBody, setTbBody] = useState<string>("");
+  const [tbLoading, setTbLoading] = useState(false);
 
   const loadSubjects = useCallback(async () => {
     try {
@@ -59,12 +67,40 @@ export function KBSearchPanel({
 
   async function openDetail(c: KnowledgeCard) {
     setOpenCard(c);
+    setView("card");
+    setTbBody("");
     setOpenMd("加载中…");
     try {
       const md = await api.getKnowledgeCardMarkdown(c.card_id);
       setOpenMd(md);
     } catch (e) {
       setOpenMd(`加载失败: ${String(e)}`);
+    }
+  }
+
+  function closeDetail() {
+    setOpenCard(null);
+    setView("card");
+    setTbBody("");
+    setOpenMd("");
+  }
+
+  async function openTextbook() {
+    if (!openCard?.subject || !openCard?.source_book) {
+      notify("当前卡片没有标注教材来源", "warn");
+      return;
+    }
+    setView("textbook");
+    setTbLoading(true);
+    setTbBody("加载中…");
+    try {
+      const txt = await api.getTextbookContent(openCard.subject, openCard.source_book);
+      setTbBody(txt);
+    } catch (e) {
+      setTbBody(`加载失败: ${String(e)}`);
+      notify(`加载教材原文失败: ${String(e)}`, "error");
+    } finally {
+      setTbLoading(false);
     }
   }
 
@@ -133,11 +169,11 @@ export function KBSearchPanel({
       </div>
 
       {openCard && (
-        <div className="kb-detail-overlay" onClick={() => setOpenCard(null)}>
+        <div className="kb-detail-overlay" onClick={closeDetail}>
           <div className="kb-detail-panel" onClick={(e) => e.stopPropagation()}>
             <header className="kb-detail-head">
               <h3>{openCard.title}</h3>
-              <button className="close-btn" onClick={() => setOpenCard(null)}>
+              <button className="close-btn" onClick={closeDetail}>
                 ✕
               </button>
             </header>
@@ -152,7 +188,35 @@ export function KBSearchPanel({
                 <span className="kb-unaudited-badge">未审计</span>
               )}
             </div>
-            <pre className="kb-detail-md">{openMd}</pre>
+
+            <div className="lit-detail-actions" style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "8px 0" }}>
+              <button
+                className={view === "card" ? "primary-btn" : "secondary-btn"}
+                onClick={() => setView("card")}
+              >
+                卡片 Markdown
+              </button>
+              <button
+                className={view === "textbook" ? "primary-btn" : "secondary-btn"}
+                onClick={() => void openTextbook()}
+                disabled={!openCard.source_book || tbLoading}
+                title={
+                  openCard.source_book
+                    ? "GET /api/knowledge/textbooks/{subject}/{name}"
+                    : "该卡片未标注教材来源"
+                }
+              >
+                {tbLoading ? "加载中…" : openCard.source_book ? `📖 教材原文：${openCard.source_book}` : "📖 教材原文（无来源）"}
+              </button>
+            </div>
+
+            {view === "card" ? (
+              <pre className="kb-detail-md">{openMd}</pre>
+            ) : (
+              <pre className="kb-detail-md" style={{ whiteSpace: "pre-wrap" }}>
+                {tbBody || "(空)"}
+              </pre>
+            )}
           </div>
         </div>
       )}

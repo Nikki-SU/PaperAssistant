@@ -306,6 +306,33 @@ async function _json<T>(input: RequestInfo, init?: RequestInit): Promise<T> {
   return (await resp.json()) as T;
 }
 
+async function _text(input: RequestInfo, init?: RequestInit): Promise<string> {
+  let resp: Response;
+  try {
+    resp = await fetch(input, init);
+  } catch (e) {
+    void daReport({
+      error: e,
+      severity: "error",
+      operation_path: typeof input === "string" ? input : "(req)",
+      user_action: "fetch",
+    });
+    throw e;
+  }
+  if (!resp.ok) {
+    const t = await resp.text().catch(() => "");
+    const err = new Error(`HTTP ${resp.status} ${resp.statusText}: ${t}`);
+    void daReport({
+      error: err,
+      severity: "warning",
+      operation_path: resp.url,
+      context: { status: resp.status, body: t.slice(0, 400) },
+    });
+    throw err;
+  }
+  return await resp.text();
+}
+
 export const api = {
   // ---------- health ----------
   health() {
@@ -445,6 +472,25 @@ export const api = {
     }>(u.toString(), { method: "POST", body: fd });
   },
 
+  deleteLiterature(doi: string) {
+    return _json<{ deleted: boolean; doi: string }>(
+      `${BASE}/api/literature/${encodeURIComponent(doi)}`,
+      { method: "DELETE" }
+    );
+  },
+
+  getLiteratureFulltext(doi: string) {
+    return _text(
+      `${BASE}/api/literature/by-doi/fulltext/${encodeURIComponent(doi)}`
+    );
+  },
+
+  getLiteratureMarkdown(doi: string) {
+    return _text(
+      `${BASE}/api/literature/by-doi/markdown/${encodeURIComponent(doi)}`
+    );
+  },
+
   // ---------- citation ----------
   listCitations(project: string) {
     return _json<{ citations: CitationRow[] }>(
@@ -462,6 +508,13 @@ export const api = {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(input),
       }
+    );
+  },
+
+  deleteCitation(project: string, doi: string) {
+    return _json<{ deleted: boolean; doi: string }>(
+      `${BASE}/api/citation/${encodeURIComponent(project)}/${encodeURIComponent(doi)}`,
+      { method: "DELETE" }
     );
   },
 
@@ -609,6 +662,12 @@ export const api = {
     return _json<{ card_id: string; subject: string; deleted_from_index: boolean }>(
       `${BASE}/api/knowledge/${encodeURIComponent(cardId)}`,
       { method: "DELETE" }
+    );
+  },
+
+  getTextbookContent(subject: string, name: string) {
+    return _text(
+      `${BASE}/api/knowledge/textbooks/${encodeURIComponent(subject)}/${encodeURIComponent(name)}`
     );
   },
 

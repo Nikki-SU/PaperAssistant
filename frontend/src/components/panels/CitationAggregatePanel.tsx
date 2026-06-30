@@ -5,10 +5,14 @@
  * - 列出 selections.csv 全部行（按 stage 分组）
  * - 一键 aggregate → 写 citations/selected.csv（同 doi 跨 stage 用 ; 合并 used_in）
  * - 显示 by_stage_selected_count 与 empty_stages 警告
- * - 单条 delete
+ * - 单条 delete selection
+ *
+ * commit β 新增：
+ * - 「已写入引用列表」区：调 listCitations 显示 citations/citations.csv
+ * - 每条 citation 支持「删除」→ DELETE /api/citation/{project}/{doi}
  */
 import { useCallback, useEffect, useState } from "react";
-import { api, AggregateResult, SelectionRow } from "../../api/client";
+import { api, AggregateResult, SelectionRow, CitationRow } from "../../api/client";
 
 interface Props {
   projectName: string;
@@ -26,8 +30,10 @@ export default function CitationAggregatePanel({ projectName }: Props) {
   const [rows, setRows] = useState<SelectionRow[]>([]);
   const [byStage, setByStage] = useState<Record<string, { selected: number; deselected: number }>>({});
   const [agg, setAgg] = useState<AggregateResult | null>(null);
+  const [citations, setCitations] = useState<CitationRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [deletingCit, setDeletingCit] = useState<string | null>(null);
   const [err, setErr] = useState("");
   const [info, setInfo] = useState("");
 
@@ -39,6 +45,14 @@ export default function CitationAggregatePanel({ projectName }: Props) {
       const r = await api.listSelections(projectName);
       setRows(r.selections);
       setByStage(r.by_stage);
+      // 同时刷新已写入的 citations
+      try {
+        const c = await api.listCitations(projectName);
+        setCitations(c.citations);
+      } catch (e2: any) {
+        // citations 加载失败不阻塞 selections 刷新
+        console.warn("listCitations 失败:", e2?.message || e2);
+      }
     } catch (e: any) {
       setErr(String(e?.message || e));
     } finally {
@@ -63,6 +77,13 @@ export default function CitationAggregatePanel({ projectName }: Props) {
           r.empty_stages.length ? r.empty_stages.join(", ") : "无"
         }`
       );
+      // 汇总后立即刷新 citations 列表
+      try {
+        const c = await api.listCitations(projectName);
+        setCitations(c.citations);
+      } catch (e2: any) {
+        console.warn("listCitations 失败:", e2?.message || e2);
+      }
     } catch (e: any) {
       setErr(String(e?.message || e));
     } finally {
@@ -81,6 +102,25 @@ export default function CitationAggregatePanel({ projectName }: Props) {
       setErr(String(e?.message || e));
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleDeleteCitation = async (doi: string) => {
+    if (!projectName) return;
+    if (!confirm(`确认删除引用？\n\n  DOI: ${doi}\n\n会从 citations/citations.csv 移除该行（selections.csv 不动）。`)) {
+      return;
+    }
+    setDeletingCit(doi);
+    setErr("");
+    try {
+      await api.deleteCitation(projectName, doi);
+      setInfo(`已删除引用：${doi}`);
+      const c = await api.listCitations(projectName);
+      setCitations(c.citations);
+    } catch (e: any) {
+      setErr(String(e?.message || e));
+    } finally {
+      setDeletingCit(null);
     }
   };
 
@@ -192,6 +232,54 @@ export default function CitationAggregatePanel({ projectName }: Props) {
                 </tr>
               );
             })}
+          </tbody>
+        </table>
+      )}
+
+      <h4 className="cite-aggregate__subtitle" style={{ marginTop: 18 }}>
+        已写入引用列表（citations/citations.csv · 共 {citations.length} 条）
+      </h4>
+      {citations.length === 0 ? (
+        <div className="cite-aggregate__empty">
+          引用列表为空。点「一键汇总」生成 selected.csv，或在写作时通过 AI 添加引用。
+        </div>
+      ) : (
+        <table className="cite-aggregate__table">
+          <thead>
+            <tr>
+              <th>doi</th>
+              <th>label</th>
+              <th>used_in</th>
+              <th>note</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {citations.map((c) => (
+              <tr key={c.doi}>
+                <td>
+                  <code>{c.doi}</code>
+                </td>
+                <td>{c.label || "—"}</td>
+                <td>
+                  <code>{c.used_in || "—"}</code>
+                </td>
+                <td title={c.note || ""}>
+                  {c.note ? c.note.slice(0, 40) + (c.note.length > 40 ? "…" : "") : "—"}
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteCitation(c.doi)}
+                    disabled={deletingCit === c.doi || busy}
+                    className="cite-aggregate__del"
+                    title="DELETE /api/citation/{project}/{doi}"
+                  >
+                    {deletingCit === c.doi ? "删除中…" : "删除引用"}
+                  </button>
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       )}

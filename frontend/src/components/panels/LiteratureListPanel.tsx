@@ -3,13 +3,20 @@
  *
  * F3 阶段增强：
  *  · 已有：列表 + 关键词检索 + 上传 PDF
- *  · 新增：点击卡片显示详情抽屉（完整字段 + abstract 完整版）
+ *  · 详情抽屉：完整字段 + abstract 完整版
  *  · 上传后显示 MinerU 进度（success / placeholder）
  *  · 文件大小提示（超 100MB 警告）+ 进度态
+ *
+ * commit β 新增（接入后端已实现但前端没用的端点）：
+ *  · 「查看 Markdown 卡片」→ GET /api/literature/by-doi/markdown/{doi}
+ *  · 「查看全文」→ GET /api/literature/by-doi/fulltext/{doi}
+ *  · 「删除文献」→ DELETE /api/literature/{doi}
  */
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import type { LiteratureCard, Project } from "../../api/client";
+
+type ViewMode = "meta" | "markdown" | "fulltext";
 
 export function LiteratureListPanel({
   project,
@@ -23,6 +30,10 @@ export function LiteratureListPanel({
   const [busy, setBusy] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [openCard, setOpenCard] = useState<LiteratureCard | null>(null);
+  const [view, setView] = useState<ViewMode>("meta");
+  const [viewBody, setViewBody] = useState<string>("");
+  const [viewLoading, setViewLoading] = useState(false);
+  const [deletingDoi, setDeletingDoi] = useState<string | null>(null);
 
   async function load() {
     setBusy(true);
@@ -64,6 +75,58 @@ export function LiteratureListPanel({
     }
   }
 
+  function openDetail(c: LiteratureCard) {
+    setOpenCard(c);
+    setView("meta");
+    setViewBody("");
+  }
+
+  function closeDetail() {
+    setOpenCard(null);
+    setView("meta");
+    setViewBody("");
+  }
+
+  async function switchView(target: ViewMode) {
+    if (!openCard) return;
+    setView(target);
+    if (target === "meta") {
+      setViewBody("");
+      return;
+    }
+    setViewLoading(true);
+    setViewBody("加载中…");
+    try {
+      const txt =
+        target === "markdown"
+          ? await api.getLiteratureMarkdown(openCard.doi)
+          : await api.getLiteratureFulltext(openCard.doi);
+      setViewBody(txt);
+    } catch (e) {
+      setViewBody(`加载失败: ${String(e)}`);
+      notify(`加载${target === "markdown" ? " Markdown 卡片" : "全文"}失败: ${String(e)}`, "error");
+    } finally {
+      setViewLoading(false);
+    }
+  }
+
+  async function deleteLit(card: LiteratureCard) {
+    if (!confirm(`确认删除文献？\n\n  DOI: ${card.doi}\n  标题: ${card.title || "（无标题）"}\n\n卡片 CSV 行 + Markdown 卡片 + 全文 Markdown 都会删除。`)) {
+      return;
+    }
+    setDeletingDoi(card.doi);
+    try {
+      await api.deleteLiterature(card.doi);
+      notify(`已删除：${card.doi}`, "ok");
+      closeDetail();
+      await load();
+    } catch (e) {
+      notify(`删除失败: ${String(e)}`, "error");
+    } finally {
+      setDeletingDoi(null);
+    }
+  }
+
   return (
     <div className="lit-list">
       <div className="lit-toolbar">
@@ -99,7 +162,7 @@ export function LiteratureListPanel({
           <article
             key={c.doi}
             className="lit-card"
-            onClick={() => setOpenCard(c)}
+            onClick={() => openDetail(c)}
             title="点击查看详情"
           >
             <header>
@@ -122,64 +185,111 @@ export function LiteratureListPanel({
       </div>
 
       {openCard && (
-        <div className="kb-detail-overlay" onClick={() => setOpenCard(null)}>
+        <div className="kb-detail-overlay" onClick={closeDetail}>
           <div className="kb-detail-panel" onClick={(e) => e.stopPropagation()}>
             <header className="kb-detail-head">
               <h3>{openCard.title || "（无标题）"}</h3>
-              <button className="close-btn" onClick={() => setOpenCard(null)}>
+              <button className="close-btn" onClick={closeDetail}>
                 ✕
               </button>
             </header>
-            <div className="muted-small kb-detail-meta">
-              <div>
-                <strong>DOI：</strong>
-                <code>{openCard.doi}</code>
-              </div>
-              <div>
-                <strong>期刊：</strong>
-                {openCard.journal || "—"}
-              </div>
-              <div>
-                <strong>一作：</strong>
-                {openCard.first_author || "—"}
-              </div>
-              {openCard.corresponding_author && (
-                <div>
-                  <strong>通讯：</strong>
-                  {openCard.corresponding_author}
-                </div>
-              )}
-              {openCard.category && (
-                <div>
-                  <strong>分类：</strong>
-                  {openCard.category}
-                  {openCard.subcategory && <> / {openCard.subcategory}</>}
-                </div>
-              )}
-              {openCard.keywords && (
-                <div>
-                  <strong>关键词：</strong>
-                  {openCard.keywords}
-                </div>
-              )}
-              <div>
-                <strong>状态：</strong>
-                <span className={"status status-" + (openCard.status || "draft")}>
-                  {openCard.status || "draft"}
-                </span>
-              </div>
-              <div>
-                <strong>更新：</strong>
-                {openCard.last_modified || "—"}
-              </div>
+
+            <div className="lit-detail-actions" style={{ display: "flex", gap: 6, flexWrap: "wrap", margin: "4px 0 10px" }}>
+              <button
+                className={view === "meta" ? "primary-btn" : "secondary-btn"}
+                onClick={() => void switchView("meta")}
+                disabled={viewLoading}
+              >
+                基本信息
+              </button>
+              <button
+                className={view === "markdown" ? "primary-btn" : "secondary-btn"}
+                onClick={() => void switchView("markdown")}
+                disabled={viewLoading}
+                title="GET /api/literature/by-doi/markdown/{doi}"
+              >
+                {view === "markdown" && viewLoading ? "加载中…" : "Markdown 卡片"}
+              </button>
+              <button
+                className={view === "fulltext" ? "primary-btn" : "secondary-btn"}
+                onClick={() => void switchView("fulltext")}
+                disabled={viewLoading}
+                title="GET /api/literature/by-doi/fulltext/{doi}"
+              >
+                {view === "fulltext" && viewLoading ? "加载中…" : "全文"}
+              </button>
+              <span style={{ flex: 1 }} />
+              <button
+                className="secondary-btn"
+                onClick={() => void deleteLit(openCard)}
+                disabled={deletingDoi === openCard.doi}
+                style={{ borderColor: "#c34646", color: "#c34646" }}
+                title="DELETE /api/literature/{doi}"
+              >
+                {deletingDoi === openCard.doi ? "删除中…" : "删除文献"}
+              </button>
             </div>
-            {openCard.abstract && (
+
+            {view === "meta" && (
               <>
-                <h4 style={{ marginTop: 12 }}>摘要</h4>
-                <pre className="kb-detail-md" style={{ whiteSpace: "pre-wrap" }}>
-                  {openCard.abstract}
-                </pre>
+                <div className="muted-small kb-detail-meta">
+                  <div>
+                    <strong>DOI：</strong>
+                    <code>{openCard.doi}</code>
+                  </div>
+                  <div>
+                    <strong>期刊：</strong>
+                    {openCard.journal || "—"}
+                  </div>
+                  <div>
+                    <strong>一作：</strong>
+                    {openCard.first_author || "—"}
+                  </div>
+                  {openCard.corresponding_author && (
+                    <div>
+                      <strong>通讯：</strong>
+                      {openCard.corresponding_author}
+                    </div>
+                  )}
+                  {openCard.category && (
+                    <div>
+                      <strong>分类：</strong>
+                      {openCard.category}
+                      {openCard.subcategory && <> / {openCard.subcategory}</>}
+                    </div>
+                  )}
+                  {openCard.keywords && (
+                    <div>
+                      <strong>关键词：</strong>
+                      {openCard.keywords}
+                    </div>
+                  )}
+                  <div>
+                    <strong>状态：</strong>
+                    <span className={"status status-" + (openCard.status || "draft")}>
+                      {openCard.status || "draft"}
+                    </span>
+                  </div>
+                  <div>
+                    <strong>更新：</strong>
+                    {openCard.last_modified || "—"}
+                  </div>
+                </div>
+                {openCard.abstract && (
+                  <>
+                    <h4 style={{ marginTop: 12 }}>摘要</h4>
+                    <pre className="kb-detail-md" style={{ whiteSpace: "pre-wrap" }}>
+                      {openCard.abstract}
+                    </pre>
+                  </>
+                )}
               </>
+            )}
+
+            {(view === "markdown" || view === "fulltext") && (
+              <pre className="kb-detail-md" style={{ whiteSpace: "pre-wrap" }}>
+                {viewBody || "(空)"}
+              </pre>
             )}
           </div>
         </div>
