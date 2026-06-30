@@ -30,8 +30,8 @@ function buildIframeUrl(template: string, query: string): string {
   if (!template.trim() || !q) return "";
   // 标准占位符 {query}；同时兼容 {q}（少数站点习惯）
   const encoded = encodeURIComponent(q);
-  if (template.includes("{query}")) return template.replaceAll("{query}", encoded);
-  if (template.includes("{q}")) return template.replaceAll("{q}", encoded);
+  if (template.includes("{query}")) return template.replace(/\{query\}/g, encoded);
+  if (template.includes("{q}")) return template.replace(/\{q\}/g, encoded);
   // 兜底：模板末尾直接拼
   return template + encoded;
 }
