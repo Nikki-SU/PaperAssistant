@@ -28,7 +28,6 @@ from pydantic import BaseModel, Field
 from ..config import get_settings
 from ..services import (
     AIRole,
-    append_role_memory_entry,  # noqa: F401  (备用)
     get_orchestrator,
 )
 from ..storage import (
