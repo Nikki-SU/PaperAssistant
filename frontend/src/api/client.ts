@@ -476,6 +476,35 @@ export const api = {
     });
   },
 
+  renderTex(project: string) {
+    return _json<{
+      project: string;
+      tex_path: string;
+      bytes: number;
+      had_title_var: boolean;
+      had_body_var: boolean;
+    }>(`${BASE}/api/typesetting/${encodeURIComponent(project)}/render_tex`, {
+      method: "POST",
+    });
+  },
+
+  compilePdf(project: string) {
+    return _json<{
+      project: string;
+      compiled: boolean;
+      pdf_path?: string;
+      bytes?: number;
+      tectonic_bin?: string;
+      reason?: "tectonic_not_found" | "tectonic_failed" | "timeout";
+      hint?: string;
+      returncode?: number;
+      stderr_tail?: string;
+      stdout_tail?: string;
+    }>(`${BASE}/api/typesetting/${encodeURIComponent(project)}/compile_pdf`, {
+      method: "POST",
+    });
+  },
+
   // ---------- ai ----------
   aiChat(input: AIChatRequest) {
     return _json<AIChatResponse>(`${BASE}/api/ai/chat`, {
