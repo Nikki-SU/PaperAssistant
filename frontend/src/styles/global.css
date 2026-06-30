@@ -1329,11 +1329,19 @@ button { font: inherit; cursor: pointer; }
 /* ---- F4 LaTeX 预览面板 ---- */
 .latex-toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
   align-items: center;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border, #e5e7eb);
   background: var(--bg-2, #fafafa);
+}
+.latex-toolbar-divider {
+  display: inline-block;
+  width: 1px;
+  height: 18px;
+  background: var(--border, #d1d5db);
+  margin: 0 2px;
 }
 .latex-export-info {
   background: #ecfeff;
@@ -1342,6 +1350,94 @@ button { font: inherit; cursor: pointer; }
   margin: 8px 10px;
 }
 .latex-export-info code { background: rgba(0,0,0,.04); }
+
+/* ---- ζ 阶段：多引擎 + 安装引导 + 结构化错误 ---- */
+.latex-engine-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 6px;
+  height: 28px;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: 4px;
+  background: #fff;
+}
+.latex-engine-select {
+  border: none;
+  outline: none;
+  background: transparent;
+  font-size: 13px;
+  cursor: pointer;
+  min-width: 110px;
+}
+.latex-engine-select:disabled { opacity: .5; cursor: not-allowed; }
+
+.latex-install-card {
+  margin: 10px 10px 0;
+  padding: 12px 14px;
+  border: 1px solid #f59e0b;
+  background: #fffbeb;
+  color: #78350f;
+  border-radius: 6px;
+}
+
+.latex-engine-info {
+  background: #f0f9ff;
+  border-color: #38bdf8;
+  color: #075985;
+  margin: 8px 10px;
+}
+.latex-engine-info code {
+  background: rgba(0,0,0,.04);
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 12px;
+}
+
+.latex-errors {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.latex-error-item {
+  background: #fff1f2;
+  border: 1px solid #fda4af;
+  border-left: 3px solid #c34646;
+  border-radius: 4px;
+  padding: 6px 10px;
+}
+.latex-error-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.latex-error-msg {
+  color: #9f1239;
+  font-weight: 500;
+  font-size: 13px;
+}
+.latex-error-line {
+  background: #c34646;
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+}
+.latex-error-ctx {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  background: rgba(0,0,0,.03);
+  border-radius: 3px;
+  font-size: 12px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  white-space: pre-wrap;
+  max-height: 100px;
+  overflow-y: auto;
+}
+.latex-error-ctx code { background: transparent; padding: 0; }
+
 .secondary-btn {
   height: 28px;
   padding: 0 12px;

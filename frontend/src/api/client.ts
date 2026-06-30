@@ -10,6 +10,24 @@ const BASE =
   (import.meta as unknown as { env?: { VITE_API_BASE?: string } }).env
     ?.VITE_API_BASE ?? "http://127.0.0.1:8181";
 
+
+// ---------- typesetting / latex engines ----------
+export type LatexEngineId = "xelatex" | "pdflatex" | "lualatex" | "tectonic";
+
+export interface LatexEngineInfo {
+  id: LatexEngineId;
+  available: boolean;
+  bin_path: string | null;
+  version: string | null;
+}
+
+export interface LatexErrorBlock {
+  kind: "error" | "warning";
+  message: string;
+  line: number | null;
+  context: string;
+}
+
 export interface Project {
   name: string;
   stage: string;
@@ -553,20 +571,40 @@ export const api = {
     });
   },
 
-  compilePdf(project: string) {
+  compilePdf(project: string, engine: string = "auto") {
+    const qs = engine && engine !== "auto" ? `?engine=${encodeURIComponent(engine)}` : "";
     return _json<{
       project: string;
       compiled: boolean;
       pdf_path?: string;
       bytes?: number;
-      tectonic_bin?: string;
-      reason?: "tectonic_not_found" | "tectonic_failed" | "timeout";
+      engine_used?: string;
+      engine_bin?: string;
+      used_latexmk?: boolean;
+      run_count?: number;
+      reason?: "no_engine" | "engine_not_found" | "compile_failed" | "timeout";
+      engine_requested?: string;
       hint?: string;
       returncode?: number;
+      errors?: LatexErrorBlock[];
+      warnings?: LatexErrorBlock[];
+      log_path?: string;
       stderr_tail?: string;
       stdout_tail?: string;
-    }>(`${BASE}/api/typesetting/${encodeURIComponent(project)}/compile_pdf`, {
+    }>(`${BASE}/api/typesetting/${encodeURIComponent(project)}/compile_pdf${qs}`, {
       method: "POST",
+    });
+  },
+
+  detectLatexEngines() {
+    return _json<{
+      engines: LatexEngineInfo[];
+      has_any: boolean;
+      auto_pick: string | null;
+      latexmk_bin: string | null;
+      install_hint: string | null;
+    }>(`${BASE}/api/typesetting/engines/detect`, {
+      method: "GET",
     });
   },
 

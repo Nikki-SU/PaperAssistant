@@ -1,16 +1,31 @@
 /**
- * LaTeX 预览（SPEC §六 / §7.5）。
+ * LaTeX 预览（SPEC §六 / §7.5 / ζ 阶段）。
  *
- * F4 阶段真实化 + H 阶段接通：
- *  · 左编辑 Markdown（父级 mdContent） → 实时转 LaTeX 显示在 <pre> 中（本地极简版）
- *  · 「导出 manuscript.md」：合并 paper/*.md → manuscript.md（POST /api/typesetting/{p}/export）
- *  · 「渲染 .tex（服务器）」：基于 paper/template.tex 渲染变量 → manuscript.tex（POST /render_tex）
- *  · 「一键编译 PDF」：自动 export → render_tex → compile_pdf；Tectonic 缺失时显示降级 reason/hint
- *  · 客户端「复制 LaTeX / 下载 .tex」保留作为本地极简兜底（无需服务器）
+ * 接通真实编译链 + 多引擎支持：
+ *  · 顶部引擎下拉（auto / xelatex / pdflatex / lualatex / tectonic），不可用引擎自动置灰
+ *  · 挂载时调 GET /api/typesetting/engines/detect 探测本机 LaTeX，全无时显示安装引导卡
+ *  · 「一键编译 PDF」：自动 export → render_tex → compile_pdf(engine)，串行任一失败即停
+ *  · 编译失败时把 .log 解析出的结构化错误（含行号）列出来，不只是 stderr 尾部
+ *  · 客户端「复制/下载 .tex」保留作本地兜底
+ *  · 引擎选择持久化到 localStorage（KEY: pa_latex_engine）
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api } from "../../api/client";
-import type { Project } from "../../api/client";
+import type {
+  Project,
+  LatexEngineInfo,
+  LatexErrorBlock,
+} from "../../api/client";
+
+const ENGINE_STORAGE_KEY = "pa_latex_engine";
+
+const ENGINE_LABEL: Record<string, string> = {
+  auto: "自动（推荐）",
+  xelatex: "xelatex",
+  pdflatex: "pdflatex",
+  lualatex: "lualatex",
+  tectonic: "tectonic",
+};
 
 type ExportInfo = {
   project: string;
@@ -33,13 +48,28 @@ type PdfInfo = {
   compiled: boolean;
   pdf_path?: string;
   bytes?: number;
-  tectonic_bin?: string;
-  reason?: "tectonic_not_found" | "tectonic_failed" | "timeout";
+  engine_used?: string;
+  engine_bin?: string;
+  used_latexmk?: boolean;
+  run_count?: number;
+  reason?: "no_engine" | "engine_not_found" | "compile_failed" | "timeout";
+  engine_requested?: string;
   hint?: string;
   returncode?: number;
+  errors?: LatexErrorBlock[];
+  warnings?: LatexErrorBlock[];
+  log_path?: string;
   stderr_tail?: string;
   stdout_tail?: string;
   at: string;
+};
+
+type EngineDetect = {
+  engines: LatexEngineInfo[];
+  has_any: boolean;
+  auto_pick: string | null;
+  latexmk_bin: string | null;
+  install_hint: string | null;
 };
 
 export function LatexPreviewPanel({
@@ -58,10 +88,47 @@ export function LatexPreviewPanel({
   const [lastTex, setLastTex] = useState<TexInfo | null>(null);
   const [lastPdf, setLastPdf] = useState<PdfInfo | null>(null);
 
+  // 引擎下拉 + 探测
+  const [engineSel, setEngineSel] = useState<string>(() => {
+    try {
+      return localStorage.getItem(ENGINE_STORAGE_KEY) || "auto";
+    } catch {
+      return "auto";
+    }
+  });
+  const [detect, setDetect] = useState<EngineDetect | null>(null);
+  const [detecting, setDetecting] = useState(false);
+
   const latex = mdToLatexMini(mdSource);
 
   function nowTime() {
     return new Date().toLocaleTimeString();
+  }
+
+  async function refreshDetect() {
+    setDetecting(true);
+    try {
+      const r = await api.detectLatexEngines();
+      setDetect(r);
+    } catch (e) {
+      notify(`检测 LaTeX 引擎失败: ${String(e)}`, "error");
+    } finally {
+      setDetecting(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshDetect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function onPickEngine(v: string) {
+    setEngineSel(v);
+    try {
+      localStorage.setItem(ENGINE_STORAGE_KEY, v);
+    } catch {
+      /* ignore */
+    }
   }
 
   async function doExport(): Promise<boolean> {
@@ -117,20 +184,25 @@ export function LatexPreviewPanel({
     }
     setCompiling(true);
     try {
-      const r = await api.compilePdf(project.name);
+      const r = await api.compilePdf(project.name, engineSel);
       setLastPdf({ ...r, at: nowTime() });
       if (r.compiled) {
-        notify(`PDF 已编译 → ${r.pdf_path}（${r.bytes} bytes）`, "ok");
+        notify(
+          `PDF 已编译（${r.engine_used}${r.used_latexmk ? "+latexmk" : ""}）→ ${r.pdf_path}`,
+          "ok",
+        );
         return true;
       }
       // 降级提示
-      if (r.reason === "tectonic_not_found") {
-        notify("Tectonic 未找到，已降级（详见下方提示）", "warn");
+      if (r.reason === "no_engine") {
+        notify("本机未装任何 LaTeX 引擎，详见下方安装引导", "warn");
+      } else if (r.reason === "engine_not_found") {
+        notify(`引擎 ${r.engine_requested ?? engineSel} 未找到`, "warn");
       } else if (r.reason === "timeout") {
-        notify("Tectonic 编译超时（180s），已中止", "warn");
-      } else if (r.reason === "tectonic_failed") {
+        notify("LaTeX 编译超时（240s）", "warn");
+      } else if (r.reason === "compile_failed") {
         notify(
-          `Tectonic 编译失败（returncode=${r.returncode}），详见下方提示与错误尾部`,
+          `编译失败（returncode=${r.returncode}）· 错误段：${(r.errors ?? []).length} 条`,
           "error",
         );
       } else {
@@ -146,7 +218,6 @@ export function LatexPreviewPanel({
   }
 
   async function doCompileAll() {
-    // 一键全流程：export → render_tex → compile_pdf；任一失败立即停
     const okExport = await doExport();
     if (!okExport) return;
     const okTex = await doRenderTex();
@@ -173,6 +244,7 @@ export function LatexPreviewPanel({
   }
 
   const busy = exporting || renderingTex || compiling;
+  const noEngine = detect !== null && !detect.has_any;
 
   return (
     <div className="latex-preview">
@@ -180,11 +252,49 @@ export function LatexPreviewPanel({
         <button
           className="primary-btn"
           onClick={() => void doCompileAll()}
-          disabled={!project || busy}
-          title="自动串行：导出 manuscript.md → 渲染 manuscript.tex → 调 Tectonic 编译 PDF"
+          disabled={!project || busy || noEngine}
+          title="自动串行：导出 manuscript.md → 渲染 manuscript.tex → 调引擎编译 PDF"
         >
           {busy ? "处理中…" : "一键编译 PDF"}
         </button>
+
+        {/* 引擎下拉 */}
+        <label className="latex-engine-pick">
+          <span className="muted-small">引擎</span>
+          <select
+            className="latex-engine-select"
+            value={engineSel}
+            onChange={(e) => onPickEngine(e.target.value)}
+            disabled={busy}
+            title="选择 LaTeX 编译引擎；auto 按 xelatex→pdflatex→lualatex→tectonic 顺序自动挑"
+          >
+            {(["auto", "xelatex", "pdflatex", "lualatex", "tectonic"] as const).map((id) => {
+              const info = id === "auto" ? null : detect?.engines.find((x) => x.id === id);
+              const avail = id === "auto" ? !!detect?.has_any : !!info?.available;
+              const label = ENGINE_LABEL[id] ?? id;
+              const suffix = id === "auto"
+                ? (detect?.auto_pick ? ` → ${detect.auto_pick}` : (detect ? " · 无可用" : ""))
+                : (avail ? " ✓" : " ·未装");
+              return (
+                <option key={id} value={id} disabled={!avail}>
+                  {label}{suffix}
+                </option>
+              );
+            })}
+          </select>
+        </label>
+
+        <button
+          className="secondary-btn"
+          onClick={() => void refreshDetect()}
+          disabled={detecting}
+          title="重新检测本机 LaTeX 引擎"
+        >
+          {detecting ? "检测中…" : "↻ 检测引擎"}
+        </button>
+
+        <span className="latex-toolbar-divider" />
+
         <button
           className="secondary-btn"
           onClick={() => void doExport()}
@@ -199,16 +309,17 @@ export function LatexPreviewPanel({
           disabled={!project || busy}
           title="POST /api/typesetting/{project}/render_tex：基于 paper/template.tex 渲染变量"
         >
-          {renderingTex ? "渲染中…" : "渲染 .tex（服务器）"}
+          {renderingTex ? "渲染中…" : "渲染 .tex"}
         </button>
         <button
           className="secondary-btn"
           onClick={() => void doCompilePdf()}
-          disabled={!project || busy}
+          disabled={!project || busy || noEngine}
           title="POST /api/typesetting/{project}/compile_pdf：仅编译已存在的 manuscript.tex"
         >
           {compiling ? "编译中…" : "仅编译 PDF"}
         </button>
+
         <span className="latex-toolbar-divider" />
         <button className="secondary-btn" onClick={() => void copyLatex()} disabled={busy}>
           复制 LaTeX（本地）
@@ -221,12 +332,42 @@ export function LatexPreviewPanel({
         </span>
       </div>
 
+      {/* 无引擎时的安装引导卡 */}
+      {noEngine && detect?.install_hint && (
+        <div className="latex-install-card">
+          <strong>⚠️ 本机未检测到任何 LaTeX 引擎</strong>
+          <div className="muted-small" style={{ marginTop: 6, lineHeight: 1.7 }}>
+            {detect.install_hint}
+          </div>
+          <div className="muted-small" style={{ marginTop: 8 }}>
+            装完后点上方 <strong>「↻ 检测引擎」</strong> 即可。
+          </div>
+        </div>
+      )}
+
+      {/* 检测结果摘要（有可用引擎时） */}
+      {detect && detect.has_any && (
+        <div className="muted-block latex-engine-info">
+          <strong>已检测到引擎：</strong>
+          {detect.engines.filter((e) => e.available).map((e) => (
+            <code key={e.id} style={{ marginLeft: 6 }}>
+              {e.id}
+              {e.version ? ` (${e.version.slice(0, 40)})` : ""}
+            </code>
+          ))}
+          {detect.latexmk_bin && (
+            <span className="muted-small" style={{ marginLeft: 8 }}>
+              · latexmk ✓（自动多遍编译）
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="muted-block">
         <strong>提示：</strong>
         <span className="muted">
-          {" "}
-          下方 <code>&lt;pre&gt;</code> 是「客户端极简版」LaTeX，仅供结构预览。真正提交编译走「一键编译 PDF」：服务器读
-          <code> paper/template.tex </code> + <code>manuscript.md</code> 渲染后调 Tectonic 出 PDF。
+          {" "}下方 <code>&lt;pre&gt;</code> 是「客户端极简版」LaTeX，仅供结构预览。真正提交编译走「一键编译 PDF」：
+          服务器读 <code>paper/template.tex</code> + <code>manuscript.md</code> 渲染后调选定引擎出 PDF。
         </span>
       </div>
 
@@ -267,7 +408,7 @@ export function LatexPreviewPanel({
           style={{
             borderLeft: lastPdf.compiled
               ? "3px solid #2e9e63"
-              : lastPdf.reason === "tectonic_not_found" || lastPdf.reason === "timeout"
+              : lastPdf.reason === "no_engine" || lastPdf.reason === "engine_not_found" || lastPdf.reason === "timeout"
               ? "3px solid #d49a2f"
               : "3px solid #c34646",
           }}
@@ -283,11 +424,22 @@ export function LatexPreviewPanel({
               </div>
               <div className="muted-small">
                 字节：{lastPdf.bytes}
-                {lastPdf.tectonic_bin && (
+                {lastPdf.engine_used && (
                   <>
-                    {" · Tectonic: "}
-                    <code>{lastPdf.tectonic_bin}</code>
+                    {" · 引擎: "}
+                    <code>{lastPdf.engine_used}</code>
                   </>
+                )}
+                {lastPdf.used_latexmk && (
+                  <span style={{ marginLeft: 6 }}>+ latexmk</span>
+                )}
+                {typeof lastPdf.run_count === "number" && lastPdf.run_count > 1 && (
+                  <span style={{ marginLeft: 6 }}>· 跑了 {lastPdf.run_count} 遍</span>
+                )}
+                {lastPdf.engine_bin && (
+                  <div>
+                    <code className="muted-small">{lastPdf.engine_bin}</code>
+                  </div>
                 )}
               </div>
             </>
@@ -301,6 +453,31 @@ export function LatexPreviewPanel({
               {typeof lastPdf.returncode === "number" && (
                 <div className="muted-small">returncode: {lastPdf.returncode}</div>
               )}
+
+              {/* 结构化错误列表（最有用的部分） */}
+              {lastPdf.errors && lastPdf.errors.length > 0 && (
+                <div className="latex-errors">
+                  <div className="muted-small" style={{ marginBottom: 4 }}>
+                    <strong>.log 错误段（{lastPdf.errors.length} 条）</strong>
+                  </div>
+                  {lastPdf.errors.map((err, idx) => (
+                    <div key={idx} className="latex-error-item">
+                      <div className="latex-error-head">
+                        <span className="latex-error-msg">{err.message}</span>
+                        {err.line !== null && (
+                          <code className="latex-error-line">l.{err.line}</code>
+                        )}
+                      </div>
+                      {err.context && (
+                        <pre className="latex-error-ctx">
+                          <code>{err.context}</code>
+                        </pre>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+
               {lastPdf.stderr_tail && (
                 <details style={{ marginTop: 4 }}>
                   <summary className="muted-small">stderr (末尾)</summary>
@@ -345,7 +522,6 @@ function mdToLatexMini(src: string): string {
   let inCode = false;
   const codeBuf: string[] = [];
 
-  // 简单文本 escape（避免破坏 $/数学符号）
   const escTex = (s: string) =>
     s
       .replace(/\\/g, "\\textbackslash{}")
@@ -362,7 +538,6 @@ function mdToLatexMini(src: string): string {
   for (const raw of lines) {
     const line = raw;
 
-    // 代码块
     if (/^```/.test(line)) {
       if (inCode) {
         out.push("\\begin{verbatim}");
@@ -381,7 +556,6 @@ function mdToLatexMini(src: string): string {
       continue;
     }
 
-    // 标题
     const h = /^(#{1,6})\s+(.+)$/.exec(line);
     if (h) {
       closeList();
@@ -391,7 +565,6 @@ function mdToLatexMini(src: string): string {
       continue;
     }
 
-    // 无序列表
     if (/^\s*[-*+]\s+/.test(line)) {
       if (inList !== "itemize") {
         closeList();
@@ -401,7 +574,6 @@ function mdToLatexMini(src: string): string {
       out.push(`  \\item ${escTex(line.replace(/^\s*[-*+]\s+/, ""))}`);
       continue;
     }
-    // 有序列表
     if (/^\s*\d+\.\s+/.test(line)) {
       if (inList !== "enumerate") {
         closeList();
@@ -412,7 +584,6 @@ function mdToLatexMini(src: string): string {
       continue;
     }
 
-    // 引用
     if (/^>\s?/.test(line)) {
       closeList();
       out.push(`\\begin{quote}${escTex(line.replace(/^>\s?/, ""))}\\end{quote}`);
@@ -425,11 +596,9 @@ function mdToLatexMini(src: string): string {
       continue;
     }
 
-    // 行内：图片 / 链接 / $..$ 保留，**bold** / *italic*
     let p = line;
     p = p.replace(/!\[([^\]]*)\]\(([^)\s]+)[^)]*\)/g, (_m, _alt, url) => `\\includegraphics[width=0.8\\linewidth]{${url}}`);
     p = p.replace(/\[([^\]]+)\]\(([^)\s]+)[^)]*\)/g, (_m, text, url) => `\\href{${url}}{${text}}`);
-    // $..$ 保留不转 escape
     const mathSlots: string[] = [];
     p = p.replace(/\$([^$\n]+)\$/g, (_m, body) => {
       mathSlots.push(body);

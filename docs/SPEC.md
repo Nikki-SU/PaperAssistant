@@ -387,7 +387,7 @@ Markdown 编辑器 Milkdown / Vditor 所见即所得，支持 LaTeX
 后端打包 PyInstaller / Nuitka sidecar EXE
 后端语言（未来） Rust 重构目标
 通信协议 HTTP（localhost） Tauri ↔ Python sidecar
-LaTeX 引擎 Tectonic 内嵌
+LaTeX 引擎 MiKTeX（主，~200MB）/ Tectonic（备选，单 exe ~30MB）/ 系统 LaTeX（降级）
 引用格式 CSL（citeproc） 本地运行
 数据存储 文件系统（Markdown + CSV） 无需数据库
 调试接入 调试助手 SDK 开发/运行期错误上报
@@ -669,7 +669,7 @@ Markdown 结构： 与 CSV 字段对应，人类可读可编辑
 当前语言 Python 3.11+
 未来重构 Rust
 打包方式 Tauri + Python sidecar → 单个 EXE
-LaTeX 引擎 Tectonic（内嵌）
+LaTeX 引擎 MiKTeX（主，内嵌或本机）/ Tectonic（备选）/ 系统 LaTeX（降级）
 数据格式 仅 CSV + Markdown（落盘存储）
 监控目录 用户设置，自动转换触发点
 数据存储目录 用户设置，所有数据根目录
