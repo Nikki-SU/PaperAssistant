@@ -20,7 +20,7 @@ from fastapi.responses import PlainTextResponse
 
 from ..config import get_settings
 from ..models import LiteratureCard, LiteratureCardCreate
-from ..services import MineruClient
+from ..services import MineruClient, auto_summarize_literature
 from ..storage import (
     LIT_CSV_HEADERS,
     append_row,
@@ -140,6 +140,7 @@ async def upload_pdf(
     file: UploadFile = File(...),
     doi: str = Query("", description="可选；不传则分配 local: 主键"),
     title: str = Query(""),
+    project: str = Query("", description="项目名；非空且 MinerU 成功时触发自动总结链路"),
 ) -> dict:
     """上传 PDF：
     1. 临时存到 temp/monitor/
@@ -175,6 +176,37 @@ async def upload_pdf(
     card_md = settings.library_cards_dir / f"{safe}.md"
     write_text(card_md, render_literature_card_md(merged))
 
+    # ---- 自动总结链路（SPEC §七.2）：MinerU 成功且指定了 project 时触发 ----
+    auto_summary_info: dict = {"status": "skipped", "message": "未触发"}
+    if result.success and project:
+        try:
+            asr = auto_summarize_literature(
+                project=project,
+                doi=final_doi,
+                title=row["title"],
+                fulltext_md_path=fulltext_path,
+            )
+            auto_summary_info = {
+                "status": asr.status,
+                "title": asr.title,
+                "doi": asr.doi,
+                "summary_chars": asr.summary_chars,
+                "audit_rounds": asr.audit_rounds,
+                "audit_log_path": asr.audit_log_path,
+                "temp_knowledge_path": asr.temp_knowledge_path,
+                "chunks_total": asr.chunks_total,
+                "message": asr.message,
+                "error_code": asr.error_code,
+                "meta": asr.meta,
+            }
+        except Exception as exc:
+            logger.exception("[upload] auto_summarize 异常（已降级）：%s", exc)
+            auto_summary_info = {
+                "status": "error",
+                "message": f"auto_summarize 异常：{exc}",
+                "error_code": "exception",
+            }
+
     return {
         "card": merged,
         "created": is_new,
@@ -186,5 +218,6 @@ async def upload_pdf(
             "page_count": result.page_count,
             "truncated": result.truncated,
         },
+        "auto_summary": auto_summary_info,
         "temp_pdf": str(temp_path),
     }

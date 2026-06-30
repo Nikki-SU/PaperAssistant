@@ -201,6 +201,9 @@ export interface AIChatResponse {
   error_code: string;
   project?: string | null;
   stage?: string | null;
+  // commit δ：free_chat 时由助手 AI 自判（SPEC §4.3）
+  self_judge_category?: "factual_summary" | "suggestion" | "free";
+  claimed_sources?: string[];
 }
 
 export interface AIRoleStatus {

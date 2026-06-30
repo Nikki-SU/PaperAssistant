@@ -1,15 +1,20 @@
 """AI 对话 API（SPEC §4.3 / §4.5 / §六）。
 
 端点：
-- POST /api/ai/chat   通用聊天端点，按 task_type 自动分流：
-                       · 6 类必须核查 → 自动调 verify_with_auditor
-                       · 4 类建议      → 标 audit_status=suggestion
-                       · free_chat/other → 标 audit_status=user
-- POST /api/ai/verify SPEC §4.3 事实核查 5 轮循环
+- POST /api/ai/chat   通用聊天端点：
+                       · task_type=free_chat → 助手 AI 自判（结构化输出 JSON）：
+                         · category=factual_summary → 用 AI 声称的 claimed_sources 自动 verify_with_auditor
+                         · category=suggestion       → 标 audit_status=suggestion，content 前置「【建议】」
+                         · category=free             → 标 audit_status=user
+                         （SPEC §4.3 触发标准：AI 输出**声称**来源就自动核查，无需用户预先指定 task_type）
+                       · task_type ∈ 6 类必须核查 → 自动调 verify_with_auditor（系统/阶段触发用）
+                       · task_type ∈ 4 类建议      → 标 audit_status=suggestion
+- POST /api/ai/verify SPEC §4.3 事实核查 5 轮循环（手动兜底）
 - GET  /api/ai/status 3 个角色的就绪状态（mineru 单独有上传端点）
 
-铁律：失败必须降级，返回结构化错误而非 5xx，方便前端友好提示。
+铁律：失败必须降级，返回结构化错误而非 5xx。
 铁律 §4.3：6 类必须核查任务在缺 sources 时直接 400；5 轮失败时硬丢弃 final_content。
+铁律（自判）：助手 AI 自判 JSON 解析失败时，回退为 free + 警告日志，绝不当 factual_summary 误入库。
 """
 from __future__ import annotations
 
@@ -153,6 +158,9 @@ class ChatResponse(BaseModel):
     stage: Optional[str] = None
     task_type: str = "free_chat"
     task_label: str = ""
+    # commit δ：free_chat 自判路径专用（其它路径默认 None）
+    self_judge_category: Optional[str] = None  # factual_summary | suggestion | free
+    claimed_sources: list[str] = []  # AI 声称的来源（DOI/教材名/章节，已扁平化为字符串）
 
 
 class RoleStatus(BaseModel):
@@ -221,6 +229,12 @@ def chat(body: ChatRequest) -> ChatResponse:
     orch.refresh()
 
     msgs = [m.model_dump() for m in body.messages]
+
+    # SPEC §4.3 自判模式：free_chat 默认走 AI 自判（让 AI 自己判 category）
+    # 由 _handle_free_chat_self_judge 处理整条链路（包括可能的自动 verify）
+    if body.task_type == "free_chat" and role == AIRole.ASSISTANT:
+        return _handle_free_chat_self_judge(orch, msgs, body)
+
     # 对 4 类建议任务，往 system 前置一句强约束，让助手必带「建议」前缀
     if body.task_type in SUGGESTION_TASKS:
         msgs = _prepend_suggestion_guard(msgs)
@@ -379,6 +393,29 @@ _SUGGESTION_GUARD = """【系统约束 · SPEC §4.3 — 推断类任务】
 """
 
 
+# SPEC §4.3 自判模式（free_chat 默认走它）：让助手 AI 输出结构化 JSON 自报核查需求。
+# 触发标准（SPEC 原文）：「如果 AI 输出的内容声称来自某篇文献/某本教材的某部分，
+# 就必须经过事实核查」→ 由 AI 自己在 category 字段里声明，而不是由用户在前端选 task_type。
+_SELF_JUDGE_GUARD = """【系统约束 · SPEC §4.3 自判模式 — 必须严格遵守】
+你必须用且仅用一个 JSON 对象回答，不要任何前后缀、解释或 Markdown 代码块包裹。格式：
+{
+  "content": "你要给用户看的回答正文，可以是 Markdown",
+  "category": "factual_summary" | "suggestion" | "free",
+  "claimed_sources": [{"title": "文献/教材名/章节", "snippet": "你引用或转述的原文片段（必填）"}]
+}
+
+category 的判定标准（你自己来判，不是用户选）：
+- factual_summary: 你的 content 声称「来自某篇文献/某本教材的某部分」「该论文表明」「教材中提到」「实验数据显示」等任何**具体来源引用**。此时必须在 claimed_sources 里给出你实际引用的原文片段，每条 snippet 至少 30 字。无原文片段就严禁选这一类。
+- suggestion: 你的 content 是推断/建议/方向性意见（如「我建议你考虑 XX 角度」「这个方向值得探索」），未声称具体来源。
+- free: 闲聊、术语定义、用法解释、操作指引，无关任何文献来源。
+
+铁律：
+1. 严禁在 content 里写「根据 XX 文献…」但 claimed_sources 留空——这会被审阅 AI 当场打回。
+2. 严禁编造 claimed_sources（DOI、作者、年份、页码均不准编）。如果你没有用户给的原文片段，category 必须 = suggestion 或 free。
+3. JSON 必须可被 json.loads 解析；中文用 UTF-8。
+"""
+
+
 def _prepend_must_audit_guard(messages: list[dict], sources: list[SourceItem]) -> list[dict]:
     src_lines = []
     for i, s in enumerate(sources, 1):
@@ -394,3 +431,211 @@ def _prepend_must_audit_guard(messages: list[dict], sources: list[SourceItem]) -
 
 def _prepend_suggestion_guard(messages: list[dict]) -> list[dict]:
     return [{"role": "system", "content": _SUGGESTION_GUARD}] + messages
+
+
+
+# ---------------- SPEC §4.3 自判模式实装 ----------------
+
+
+def _handle_free_chat_self_judge(orch, messages: list[dict], body: "ChatRequest") -> "ChatResponse":
+    """free_chat 路径的 AI 自判核心。
+
+    流程：
+    1. 把 _SELF_JUDGE_GUARD 前置到 system，让助手 AI 输出结构化 JSON
+    2. 解析 JSON → 取出 content / category / claimed_sources
+    3. 解析失败 → 视为 free，原文返回 + 警告日志
+    4. category=factual_summary 且 claimed_sources 非空 → 走 verify_with_auditor 5 轮循环
+    5. category=suggestion → 前置「【建议】」
+    6. category=free → audit_status=user
+    """
+    # 1) 注入自判约束
+    judged_msgs = [{"role": "system", "content": _SELF_JUDGE_GUARD}] + messages
+    # 优先用 OpenAI json_object 强制输出（DeepSeek/Qwen 兼容；不支持的会忽略）
+    extra = dict(body.extra or {})
+    extra.setdefault("response_format", {"type": "json_object"})
+
+    result = orch.chat(AIRole.ASSISTANT, judged_msgs, extra=extra)
+
+    # 2) 调用失败 → 直接返回 error
+    if not result.success:
+        return ChatResponse(
+            success=False,
+            role=body.role,
+            effective_role=result.role.value,
+            output="",
+            audit_status="error",
+            error=result.error,
+            error_code=result.error_code,
+            project=body.project,
+            stage=body.stage,
+            task_type="free_chat",
+            task_label="自由对话（AI 自判）",
+        )
+
+    # 3) 解析 JSON
+    parsed = _parse_self_judge_output(result.output)
+    content = parsed.get("content", "").strip()
+    category = parsed.get("category", "free")
+    claimed_sources_raw = parsed.get("claimed_sources", []) or []
+    parse_warning = parsed.get("_parse_warning", "")
+
+    # 4) 校验 category & sources 配套（防 AI 撒谎）
+    cleaned_sources = []
+    for s in claimed_sources_raw:
+        if not isinstance(s, dict):
+            continue
+        snippet = str(s.get("snippet") or "").strip()
+        if len(snippet) < 10:
+            continue
+        cleaned_sources.append({
+            "title": str(s.get("title") or "").strip(),
+            "snippet": snippet,
+        })
+
+    # 没拿到 content → 用原始输出兜底
+    if not content:
+        content = result.output.strip()
+        category = "free"
+        parse_warning = parse_warning or "AI 未输出 JSON 中的 content 字段，已降级为自由对话"
+
+    # AI 声称要核查但没给 sources → 强制降级为 suggestion（不能让无来源的内容混入临时知识）
+    if category == "factual_summary" and not cleaned_sources:
+        logger.warning("free_chat 自判：AI 声称 factual_summary 但 claimed_sources 为空，强制降为 suggestion")
+        category = "suggestion"
+        parse_warning = (parse_warning + " | AI 自判为 factual_summary 但未提供来源片段，已降级").strip(" |")
+
+    final_output = content
+    audit_status: Literal["verified", "failed", "not_configured", "suggestion", "user", "error"] = "user"
+    audit_rounds = 0
+    audit_feedback = parse_warning
+    audit_log_path = ""
+    audit_dropped = False
+
+    # 5) 按 category 分流
+    if category == "factual_summary":
+        # 走 5 轮核查
+        verify = orch.verify_with_auditor(
+            content=content,
+            sources=cleaned_sources,
+            project=body.project,
+        )
+        audit_rounds = verify.rounds
+        audit_feedback = (parse_warning + " | " + verify.last_feedback).strip(" |") if parse_warning else verify.last_feedback
+        audit_log_path = verify.log_path
+        if verify.status == "verified":
+            audit_status = "verified"
+            final_output = verify.final_content
+        elif verify.status == "failed":
+            audit_status = "failed"
+            final_output = ""
+            audit_dropped = True
+        elif verify.status == "not_configured":
+            audit_status = "not_configured"
+        else:
+            audit_status = "error"
+    elif category == "suggestion":
+        audit_status = "suggestion"
+        if final_output and not final_output.lstrip().startswith(("【建议", "建议", "Suggestion", "[建议")):
+            final_output = "【建议】\n\n" + final_output
+    else:
+        audit_status = "user"
+
+    # 6) 记入项目 assistant.md 记忆
+    try:
+        if body.project:
+            short_user = ""
+            for m in reversed(messages):
+                if m.get("role") == "user":
+                    short_user = m.get("content", "")
+                    break
+            append_assistant_memory(
+                body.project,
+                stage=body.stage or "",
+                task_type=f"free_chat[self_judge:{category}]",
+                user_message=short_user,
+                assistant_output=final_output if final_output else f"_(已丢弃) {audit_feedback or ''}_",
+                audit_status=audit_status,
+                rounds=audit_rounds,
+                success=True,
+                error="",
+            )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("append_assistant_memory failed: %s", e)
+
+    # 把 claimed_sources 扁平化为字符串列表给前端展示
+    flat_sources: list[str] = []
+    for s in claimed_sources_raw:
+        if isinstance(s, dict):
+            title = (s.get("title") or "").strip()
+            snippet = (s.get("snippet") or "").strip()
+            if title and snippet:
+                flat_sources.append(f"{title} — {snippet[:120]}")
+            elif title:
+                flat_sources.append(title)
+            elif snippet:
+                flat_sources.append(snippet[:160])
+        elif isinstance(s, str) and s.strip():
+            flat_sources.append(s.strip())
+
+    return ChatResponse(
+        success=True,
+        role=body.role,
+        effective_role=result.role.value,
+        output=final_output,
+        audit_status=audit_status,
+        audit_rounds=audit_rounds,
+        audit_feedback=audit_feedback,
+        audit_log_path=audit_log_path,
+        audit_dropped=audit_dropped,
+        error="",
+        error_code="",
+        project=body.project,
+        stage=body.stage,
+        task_type=f"free_chat:{category}",
+        task_label={
+            "factual_summary": "自由对话 · AI 自判：来源引用（自动核查）",
+            "suggestion":      "自由对话 · AI 自判：建议（无需核查）",
+            "free":            "自由对话 · AI 自判：闲聊（无需核查）",
+        }.get(category, "自由对话（AI 自判）"),
+        self_judge_category=category,
+        claimed_sources=flat_sources,
+    )
+
+
+def _parse_self_judge_output(text: str) -> dict:
+    """解析助手 AI 自判 JSON。失败时返回 {_parse_warning: ...}，由调用方降级。"""
+    import json as _json
+    if not text:
+        return {"_parse_warning": "AI 未返回任何内容"}
+    s = text.strip()
+    # 去掉 ```json ... ``` 包裹
+    if s.startswith("```"):
+        first_nl = s.find("\n")
+        if first_nl != -1:
+            s = s[first_nl + 1:]
+        if s.endswith("```"):
+            s = s[: -3]
+        s = s.strip()
+    lb, rb = s.find("{"), s.rfind("}")
+    if lb != -1 and rb > lb:
+        s = s[lb : rb + 1]
+    try:
+        obj = _json.loads(s)
+        if not isinstance(obj, dict):
+            return {"_parse_warning": "JSON 不是对象"}
+        cat = str(obj.get("category", "")).strip()
+        if cat not in ("factual_summary", "suggestion", "free"):
+            cat = "free"
+        return {
+            "content": str(obj.get("content", "") or ""),
+            "category": cat,
+            "claimed_sources": obj.get("claimed_sources") or [],
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.warning("self_judge JSON parse failed: %s, raw=%r", e, text[:200])
+        return {
+            "content": text,  # 用原始输出兜底
+            "category": "free",
+            "claimed_sources": [],
+            "_parse_warning": f"AI 自判 JSON 解析失败（已降级为自由对话）: {e!s}",
+        }

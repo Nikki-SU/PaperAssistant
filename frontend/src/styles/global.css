@@ -1501,3 +1501,59 @@ button { font: inherit; cursor: pointer; }
   margin: 1px 2px;
 }
 .cite-aggregate__del:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* ============== Markdown editor — Vditor wysiwyg (commit δ) ============== */
+.md-editor-wysiwyg { display: flex; flex-direction: column; height: 100%; }
+.md-topbar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #e5e7eb;
+  background: #f9fafb;
+}
+.md-topbar-hint { margin-left: auto; }
+.md-vditor-host {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.md-vditor-host .vditor { height: 100% !important; }
+.md-statusbar {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 4px 10px;
+  border-top: 1px solid #e5e7eb;
+  background: #f9fafb;
+  font-size: 12px;
+}
+.md-save-btn { font-size: 12px; padding: 4px 10px; }
+.md-status { font-size: 12px; padding: 2px 6px; border-radius: 3px; }
+.md-status-saved { color: #059669; }
+.md-status-dirty { color: #b45309; }
+.md-status-saving { color: #2563eb; }
+.md-status-error { color: #dc2626; }
+
+/* ============== AI 自判分类（commit δ） ============== */
+.ai-self-judge-hint {
+  padding: 8px 12px;
+  background: #f0f9ff;
+  border-bottom: 1px solid #e0f2fe;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #075985;
+}
+.msg-category {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 3px;
+  font-weight: 500;
+  margin-left: 6px;
+}
+.msg-cat-factual_summary { background: #fef3c7; color: #92400e; }
+.msg-cat-suggestion      { background: #dbeafe; color: #1e40af; }
+.msg-cat-free            { background: #f3f4f6; color: #4b5563; }
+.ai-msg-sources {
+  margin-top: 6px;
+  font-size: 12px;
+}
+.ai-msg-sources summary { cursor: pointer; color: #6b7280; }
+.ai-msg-sources ul { margin: 4px 0 0 18px; padding: 0; }
+.ai-msg-sources li { margin: 2px 0; font-size: 12px; }

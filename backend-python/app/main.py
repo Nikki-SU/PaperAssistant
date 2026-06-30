@@ -21,6 +21,7 @@ from .api import (
     project,
     selections as selections_api,
     settings as settings_api,
+    stages_auto as stages_auto_api,
     temp_knowledge as temp_knowledge_api,
     typesetting,
 )
@@ -88,6 +89,7 @@ def create_app() -> FastAPI:
     app.include_router(temp_knowledge_api.router)
     app.include_router(file_watcher_api.router)
     app.include_router(selections_api.router)
+    app.include_router(stages_auto_api.router)
 
     @app.on_event("startup")
     def _on_startup() -> None:

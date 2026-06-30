@@ -1,24 +1,26 @@
 /**
- * AI 对话面板（SPEC §4.3 / §六 / §7.x）。
+ * AI 对话面板（SPEC §4.3 / §六 — commit δ 重写）。
  *
- * - 角色切换：assistant / auditor / secretary
- * - **任务类型选择器**：12 种任务（6 必须 + 4 建议 + 2 自由），后端自动按 policy 走核查
- * - **sources 编辑区**：必须类任务时至少填 1 条来源片段，否则后端 422
- * - 调真 API：POST /api/ai/chat
- * - 错误友好提示：not_configured → 引导去设置
- * - 审计 badge 来自后端 audit_status（6 种）
- * - 🔍 手动核查按钮：仅在 free_chat/other 兜底显示
+ * 与上一版的根本区别：
+ *  · ❌ 删除「task_type 选择器」——SPEC §4.3 真正本意是 AI 自判触发，不该人手挑
+ *  · ❌ 删除「sources 编辑区」——日常聊天用户没法填，且 AI 自判含 claimed_sources
+ *  · ✅ 仍保留角色 tabs（assistant/auditor/secretary）
+ *  · ✅ 后端统一发 task_type="free_chat"，由 backend ai.py 注入的 SELF_JUDGE_GUARD 让助手自判
+ *    输出 {content, category, claimed_sources}，后端按 category 分流：
+ *      - factual_summary + 非空 claimed_sources → 自动 verify_with_auditor 5 轮
+ *      - suggestion → 直接展示，标 💡 建议
+ *      - free → 直接展示，标 💬 自由
+ *      - 撒谎防御：声称 factual_summary 但 claimed_sources 空 → 强制降级 suggestion
+ *  · ✅ 保留 AuditBadge（审阅状态）+ 手动 🔍 事实核查兜底按钮
+ *  · ✅ 错误友好提示：not_configured → 引导去设置
  */
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../../api/client";
 import type {
   AIChatMessage,
-  AIChatTaskType,
   AIRole,
   AuditStatus,
-  ChatSource,
   Project,
-  TaskTypeInfo,
 } from "../../api/client";
 
 interface Msg {
@@ -26,15 +28,14 @@ interface Msg {
   role: "user" | "assistant";
   text: string;
   audit: AuditStatus;
-  taskType?: AIChatTaskType;
-  taskLabel?: string;
+  category?: string;          // AI 自判：factual_summary | suggestion | free
+  claimedSources?: string[];  // AI 自判：声称的来源（DOI / 教材名等）
   auditRounds?: number;
   auditFeedback?: string;
   auditLogPath?: string;
   auditDropped?: boolean;
-  citations?: { doi: string; checked: boolean }[];
   errorCode?: string;
-  // 手动核查兜底（仅 free_chat / other）
+  // 手动核查兜底
   verifyState?: "idle" | "running" | "verified" | "failed" | "not_configured" | "error";
   verifyFeedback?: string;
   verifyRounds?: number;
@@ -54,24 +55,11 @@ const ROLE_LABEL: Record<AIRole, string> = {
   secretary: "秘书",
 };
 
-// 默认 task_type：自由对话
-const DEFAULT_TASK: AIChatTaskType = "free_chat";
-
 export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: Props) {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [role, setRole] = useState<AIRole>("assistant");
-
-  // 任务类型
-  const [taskTypes, setTaskTypes] = useState<TaskTypeInfo[]>([]);
-  const [taskType, setTaskType] = useState<AIChatTaskType>(DEFAULT_TASK);
-
-  // sources 编辑：(title, snippet) 列表
-  const [sources, setSources] = useState<ChatSource[]>([]);
-  const [showSourcesEditor, setShowSourcesEditor] = useState(false);
-
-  // 角色状态
   const [roleStatus, setRoleStatus] = useState<Record<string, boolean>>({});
 
   // 拉 AI 角色就绪状态
@@ -88,32 +76,6 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
     return () => { cancelled = true; };
   }, [apiKeysReady]);
 
-  // 拉任务类型枚举
-  useEffect(() => {
-    let cancelled = false;
-    void api.aiTaskTypes()
-      .then((r) => {
-        if (cancelled) return;
-        setTaskTypes(r.items);
-      })
-      .catch(() => { /* 静默 */ });
-    return () => { cancelled = true; };
-  }, []);
-
-  const currentTaskInfo = useMemo<TaskTypeInfo | null>(
-    () => taskTypes.find((t) => t.key === taskType) ?? null,
-    [taskType, taskTypes]
-  );
-
-  // 切换任务类型时自动展开/收起 sources 区
-  useEffect(() => {
-    if (currentTaskInfo?.requires_sources) {
-      setShowSourcesEditor(true);
-    } else {
-      setShowSourcesEditor(false);
-    }
-  }, [currentTaskInfo?.requires_sources]);
-
   const currentRoleReady = roleStatus[role] ?? apiKeysReady;
   const headerStatusBadge = useMemo(() => {
     if (currentRoleReady) return <span className="badge-ok">● {ROLE_LABEL[role]} 就绪</span>;
@@ -125,36 +87,15 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
     );
   }, [currentRoleReady, role, onOpenSettings]);
 
-  function addSource() {
-    setSources((arr) => [...arr, { title: "", snippet: "" }]);
-  }
-  function updateSource(idx: number, patch: Partial<ChatSource>) {
-    setSources((arr) => arr.map((s, i) => (i === idx ? { ...s, ...patch } : s)));
-  }
-  function removeSource(idx: number) {
-    setSources((arr) => arr.filter((_, i) => i !== idx));
-  }
-
   async function send() {
     const text = input.trim();
     if (!text || busy) return;
-
-    // 前端校验：必须类必须至少 1 条 sources
-    if (currentTaskInfo?.requires_sources) {
-      const valid = sources.filter((s) => s.snippet.trim().length > 0);
-      if (valid.length === 0) {
-        notify(`「${currentTaskInfo.label}」必须提供至少 1 条来源片段（snippet）`, "error");
-        return;
-      }
-    }
 
     const userMsg: Msg = {
       id: `u-${Date.now()}`,
       role: "user",
       text,
       audit: "user",
-      taskType,
-      taskLabel: currentTaskInfo?.label,
     };
     setMessages((ms) => [...ms, userMsg]);
     setInput("");
@@ -179,26 +120,31 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
       }));
     history.push({ role: "user", content: text });
 
-    // 拼 sources 给后端
-    const submittedSources: ChatSource[] = currentTaskInfo?.requires_sources
-      ? sources.filter((s) => s.snippet.trim().length > 0)
-      : sources.filter((s) => s.snippet.trim().length > 0);  // 即便不强制，用户填了也带上
-
     try {
       const resp = await api.aiChat({
         role,
         messages: history,
         project: project?.name,
         stage: project?.stage,
-        task_type: taskType,
-        sources: submittedSources,
+        // commit δ：固定 free_chat，由后端 SELF_JUDGE_GUARD 让 AI 自判 category
+        task_type: "free_chat",
+        sources: [],
       });
+
+      // 从后端响应中读取 AI 自判结果（向后兼容旧字段）
+      const extraAny = resp as unknown as {
+        self_judge_category?: string;
+        claimed_sources?: string[];
+      };
+      const category = extraAny.self_judge_category;
+      const claimedSources = extraAny.claimed_sources;
+
       setMessages((ms) => [...ms, {
         id: `a-${Date.now()}`,
         role: "assistant",
         text: resp.success
           ? (resp.audit_dropped
-              ? "（事实核查 5 轮未通过，内容已自动丢弃，不入库。请补充更可信的来源后重试。）"
+              ? "（AI 自判为事实总结，但审阅 5 轮未通过，内容已自动丢弃，不入库。请补充更可信的来源或换种问法。）"
               : (resp.output || "（AI 返回了空内容）"))
           : `⚠ ${resp.error || "AI 调用失败"}`,
         audit: resp.success ? resp.audit_status : "error",
@@ -206,10 +152,11 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
         auditFeedback: resp.audit_feedback,
         auditLogPath: resp.audit_log_path,
         auditDropped: resp.audit_dropped,
-        taskType: (resp.task_type as AIChatTaskType) || taskType,
-        taskLabel: resp.task_label || currentTaskInfo?.label,
+        category,
+        claimedSources,
         errorCode: resp.error_code || undefined,
       }]);
+
       if (!resp.success) {
         const tip = resp.error_code === "not_configured"
           ? "请到设置里补齐 endpoint/model/key。"
@@ -220,49 +167,30 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
               : "未知错误，已记录。";
         notify(`${ROLE_LABEL[role]} 调用失败：${tip}`, "warn");
       } else if (resp.audit_status === "verified") {
-        notify(`已自动通过事实核查（${resp.audit_rounds} 轮）`, "ok");
+        notify(`AI 自判为事实总结，已通过事实核查（${resp.audit_rounds} 轮）`, "ok");
       } else if (resp.audit_status === "failed" && resp.audit_dropped) {
         notify(`事实核查 5 轮未通过，内容已硬丢弃（不入库）`, "error");
       } else if (resp.audit_status === "not_configured") {
-        notify(`审阅 AI 未配置，无法自动核查；请先到设置面板填写`, "warn");
+        notify(`审阅 AI 未配置；本条 AI 输出未经核查，请到设置面板填写`, "warn");
       } else if (resp.audit_status === "suggestion") {
-        notify(`已生成「建议」内容（非事实性结论）`, "ok");
+        notify(`AI 自判为「建议」（非事实结论）`, "ok");
       }
     } catch (e) {
-      // 422 = 必须类缺 sources
       const msg = String(e);
-      const isMissingSources = /HTTP 422/.test(msg);
       setMessages((ms) => [...ms, {
         id: `a-${Date.now()}`,
         role: "assistant",
-        text: isMissingSources
-          ? `⚠ 当前任务「${currentTaskInfo?.label}」必须事实核查，请先在 sources 编辑区填入来源片段。`
-          : `⚠ 请求失败：${msg}（请检查后端是否已启动 8181）`,
+        text: `⚠ 请求失败：${msg}（请检查后端是否已启动 8181）`,
         audit: "error",
-        errorCode: isMissingSources ? "missing_sources" : "network",
+        errorCode: "network",
       }]);
-      notify(isMissingSources ? `缺少来源片段，已拒绝` : `请求 /api/ai/chat 失败：${msg}`, "error");
+      notify(`请求 /api/ai/chat 失败：${msg}`, "error");
     } finally {
       setBusy(false);
     }
   }
 
-  function toggleCitation(msgId: string, doi: string) {
-    setMessages((ms) =>
-      ms.map((m) => {
-        if (m.id !== msgId || !m.citations) return m;
-        return {
-          ...m,
-          citations: m.citations.map((c) =>
-            c.doi === doi ? { ...c, checked: !c.checked } : c
-          ),
-        };
-      })
-    );
-    notify(`已切换文献勾选 ${doi}`, "ok");
-  }
-
-  // 手动核查（仅 free_chat / other 兜底）
+  // 手动核查（兜底：当用户怀疑 AI 自判错误时，强制再核一遍）
   async function verifyMsg(msgId: string) {
     const m = messages.find((x) => x.id === msgId);
     if (!m || m.role !== "assistant" || !m.text.trim()) return;
@@ -272,7 +200,7 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
     try {
       const resp = await api.aiVerify({
         content: m.text,
-        sources: sources.filter((s) => s.snippet.trim().length > 0),
+        sources: [],  // 用户不再编辑 sources；审阅 AI 直接比对 AI 自己声称的来源
         project: project?.name,
         max_rounds: 5,
       });
@@ -312,14 +240,6 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
     }
   }
 
-  // 任务分组渲染
-  const groupedTasks = useMemo(() => {
-    const must = taskTypes.filter((t) => t.policy === "must_audit");
-    const sugg = taskTypes.filter((t) => t.policy === "suggestion");
-    const free = taskTypes.filter((t) => t.policy === "free");
-    return { must, sugg, free };
-  }, [taskTypes]);
-
   return (
     <div className="ai-chat">
       <div className="ai-chat-status">
@@ -342,112 +262,41 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
         </span>
       </div>
 
-      {/* 任务类型选择器（SPEC §4.3） */}
-      <div className="ai-task-selector">
-        <label className="ai-task-label">任务类型：</label>
-        <select
-          className="ai-task-select"
-          value={taskType}
-          onChange={(e) => setTaskType(e.target.value as AIChatTaskType)}
-          disabled={busy}
-        >
-          {groupedTasks.must.length > 0 && (
-            <optgroup label="🔒 必须事实核查（自动）">
-              {groupedTasks.must.map((t) => (
-                <option key={t.key} value={t.key}>{t.label}</option>
-              ))}
-            </optgroup>
-          )}
-          {groupedTasks.sugg.length > 0 && (
-            <optgroup label="💡 建议（非事实结论）">
-              {groupedTasks.sugg.map((t) => (
-                <option key={t.key} value={t.key}>{t.label}</option>
-              ))}
-            </optgroup>
-          )}
-          {groupedTasks.free.length > 0 && (
-            <optgroup label="💬 自由对话">
-              {groupedTasks.free.map((t) => (
-                <option key={t.key} value={t.key}>{t.label}</option>
-              ))}
-            </optgroup>
-          )}
-        </select>
-        {currentTaskInfo && (
-          <span className={`task-policy-tag policy-${currentTaskInfo.policy}`}>
-            {currentTaskInfo.policy === "must_audit" && "🔒 自动核查"}
-            {currentTaskInfo.policy === "suggestion" && "💡 仅建议"}
-            {currentTaskInfo.policy === "free" && "💬 自由"}
-          </span>
-        )}
+      <div className="ai-self-judge-hint muted-small">
+        💬 自然对话即可。助手 AI 会自己判断你的请求属于「事实总结」「建议」或「自由聊天」——
+        声称来自具体文献时会自动触发审阅 AI 5 轮事实核查；建议性内容标「💡 建议」。
       </div>
-
-      {/* sources 编辑区（必须类强制，其它可选） */}
-      {showSourcesEditor && (
-        <div className="ai-sources-editor">
-          <div className="ai-sources-head">
-            <span className="ai-sources-title">
-              来源片段 {currentTaskInfo?.requires_sources && <span className="required-star">*</span>}
-            </span>
-            <button className="link-btn" onClick={addSource} disabled={busy}>+ 添加</button>
-            {!currentTaskInfo?.requires_sources && (
-              <button className="link-btn" onClick={() => setShowSourcesEditor(false)} disabled={busy}>收起</button>
-            )}
-          </div>
-          {sources.length === 0 && (
-            <div className="muted-small">
-              {currentTaskInfo?.requires_sources
-                ? `「${currentTaskInfo.label}」必须至少 1 条来源片段（snippet），否则后端拒绝（422）`
-                : "可选：贴入原文片段以便审阅核查"}
-            </div>
-          )}
-          {sources.map((s, i) => (
-            <div key={i} className="source-row">
-              <input
-                type="text"
-                placeholder="标题/DOI（可选）"
-                value={s.title ?? ""}
-                onChange={(e) => updateSource(i, { title: e.target.value })}
-                disabled={busy}
-                className="source-title-input"
-              />
-              <textarea
-                rows={2}
-                placeholder="原文片段（snippet，必填）"
-                value={s.snippet}
-                onChange={(e) => updateSource(i, { snippet: e.target.value })}
-                disabled={busy}
-                className="source-snippet-input"
-              />
-              <button className="link-btn link-btn-danger" onClick={() => removeSource(i)} disabled={busy}>
-                删除
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      {!showSourcesEditor && !currentTaskInfo?.requires_sources && (
-        <div className="ai-sources-collapsed">
-          <button className="link-btn" onClick={() => setShowSourcesEditor(true)} disabled={busy}>
-            ＋ 添加来源（可选）
-          </button>
-        </div>
-      )}
 
       <div className="ai-chat-history">
         {messages.length === 0 && (
           <div className="empty-hint">
-            还没有对话。先选择任务类型，必要时填入来源片段，然后输入消息。Ctrl+Enter 发送。
+            还没有对话。直接输入问题，AI 会自判分流。Ctrl+Enter 发送。
           </div>
         )}
         {messages.map((m) => (
           <div key={m.id} className={"ai-msg ai-msg-" + m.role}>
             <div className="ai-msg-head">
               <span className="msg-role">{m.role === "user" ? "你" : ROLE_LABEL[role]}</span>
-              {m.taskLabel && <span className="msg-task-label">[{m.taskLabel}]</span>}
+              {m.category && (
+                <span className={`msg-category msg-cat-${m.category}`}>
+                  {m.category === "factual_summary" && "🔒 事实总结"}
+                  {m.category === "suggestion" && "💡 建议"}
+                  {m.category === "free" && "💬 自由"}
+                </span>
+              )}
               <AuditBadge audit={m.audit} rounds={m.auditRounds} dropped={m.auditDropped} />
             </div>
             <div className="ai-msg-body">{m.text}</div>
+            {m.claimedSources && m.claimedSources.length > 0 && (
+              <details className="ai-msg-sources">
+                <summary>AI 声称的来源（{m.claimedSources.length} 条）</summary>
+                <ul>
+                  {m.claimedSources.map((s, i) => (
+                    <li key={i}><code>{s}</code></li>
+                  ))}
+                </ul>
+              </details>
+            )}
             {m.auditFeedback && (m.audit === "failed" || m.audit === "verified") && (
               <details className="ai-msg-feedback">
                 <summary>审阅反馈（{m.auditRounds} 轮）</summary>
@@ -460,17 +309,14 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
                 <button className="link-btn" onClick={onOpenSettings}>去设置 →</button>
               </div>
             )}
-            {/* 手动核查按钮：仅 free_chat / other 兜底 */}
-            {m.role === "assistant"
-              && !m.errorCode
-              && (m.taskType === "free_chat" || m.taskType === "other")
-              && (
+            {/* 手动核查兜底（任何 assistant 消息都可触发） */}
+            {m.role === "assistant" && !m.errorCode && (
               <div className="ai-msg-verify">
                 {(!m.verifyState || m.verifyState === "idle") && (
                   <button
                     className="link-btn"
                     onClick={() => void verifyMsg(m.id)}
-                    title="让审阅 AI 检查本条内容是否与原文一致（最多 5 轮）"
+                    title="让审阅 AI 重新检查本条内容（覆盖 AI 自判）"
                   >🔍 手动事实核查</button>
                 )}
                 {m.verifyState === "running" && (
@@ -503,21 +349,6 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
                 )}
               </div>
             )}
-            {m.citations && m.citations.length > 0 && (
-              <div className="ai-citations">
-                <div className="citations-title">交互式文献勾选：</div>
-                {m.citations.map((c) => (
-                  <label key={c.doi} className="citation-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={c.checked}
-                      onChange={() => toggleCitation(m.id, c.doi)}
-                    />
-                    <code>{c.doi}</code>
-                  </label>
-                ))}
-              </div>
-            )}
           </div>
         ))}
         {busy && (
@@ -527,9 +358,7 @@ export function AIChatPanel({ project, apiKeysReady, onOpenSettings, notify }: P
               <span className="audit-badge audit-suggestion">思考中…</span>
             </div>
             <div className="ai-msg-body muted-small">
-              （正在调用远端模型
-              {currentTaskInfo?.policy === "must_audit" && "，必须类任务会自动事实核查最多 5 轮"}
-              ）
+              （AI 正在自判分类。声称来自具体文献时会自动事实核查最多 5 轮）
             </div>
           </div>
         )}

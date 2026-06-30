@@ -31,6 +31,10 @@ from .file_watcher import (
     start_watcher,
     stop_watcher,
 )
+from .auto_summarize import (
+    AutoSummarizeResult,
+    auto_summarize_literature,
+)
 
 __all__ = [
     "MineruClient",
@@ -58,4 +62,6 @@ __all__ = [
     "load_role_config",
     "append_assistant_memory",
     "append_secretary_memory",
+    "AutoSummarizeResult",
+    "auto_summarize_literature",
 ]
